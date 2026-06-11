@@ -153,6 +153,10 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
         prefix_len = len(self._channel_prefix)
         async with self._pool.connection() as conn:
             for event_id in self._by_event:
+                # LISTEN cannot be parameterized; psycopg.sql.Identifier quotes
+                # the channel name safely, and _validate_channel has already
+                # rejected anything outside [A-Za-z_][A-Za-z0-9_$]*.
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
                 await conn.execute(
                     SQL("LISTEN {}").format(Identifier(self._channel(event_id)))
                 )
