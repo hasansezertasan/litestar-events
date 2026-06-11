@@ -29,8 +29,12 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by ``aiokafka`` (pure-Python Kafka).
 
     Delivery semantics:
-      - At-least-once with consumer-group offsets (auto-commit on by default).
+      - At-least-once with consumer-group offsets. Auto-commit is disabled;
+        offsets are committed only after listener dispatch returns, so a
+        worker crash mid-dispatch causes the broker to redeliver.
       - Listener exceptions are caught per-listener; siblings still complete.
+        A listener that raises does not block the commit — the contract is
+        at-least-once at the transport layer, not at the listener layer.
       - ``group_id`` controls fanout vs work-queue:
           * Unique per instance (default, random UUID): every app instance
             sees every event (broadcast/fanout).
@@ -98,7 +102,7 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
                 bootstrap_servers=self._bootstrap_servers,
                 group_id=self._group_id,
                 auto_offset_reset=self._auto_offset_reset,
-                enable_auto_commit=True,
+                enable_auto_commit=False,
             )
             await self._consumer.start()
             self._consumer_task = asyncio.create_task(self._consumer_loop())
@@ -169,3 +173,11 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
                 *(_run_one(listener) for listener in listeners),
                 return_exceptions=True,
             )
+
+            try:
+                await self._consumer.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to commit offset for event %s; message may redeliver",
+                    event_id,
+                )

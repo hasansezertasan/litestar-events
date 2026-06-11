@@ -30,8 +30,12 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by ``confluent-kafka`` (librdkafka).
 
     Delivery semantics:
-      - At-least-once with consumer-group offsets (auto-commit on by default).
+      - At-least-once with consumer-group offsets. Auto-commit is disabled;
+        offsets are committed only after listener dispatch returns, so a
+        worker crash mid-dispatch causes the broker to redeliver.
       - Listener exceptions are caught per-listener; siblings still complete.
+        A listener that raises does not block the commit — the contract is
+        at-least-once at the transport layer, not at the listener layer.
       - ``group_id`` controls fanout vs work-queue:
           * Unique per instance (default, random UUID): every app instance
             sees every event (broadcast/fanout).
@@ -111,7 +115,7 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
                     "bootstrap.servers": self._bootstrap_servers,
                     "group.id": self._group_id,
                     "auto.offset.reset": "latest",
-                    "enable.auto.commit": True,
+                    "enable.auto.commit": False,
                     **self._consumer_config,
                 }
             )
@@ -241,3 +245,14 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
                 *(_run_one(listener) for listener in listeners),
                 return_exceptions=True,
             )
+
+            try:
+                await self._run_consumer(
+                    lambda m: self._consumer.commit(message=m, asynchronous=False),
+                    msg,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to commit offset for event %s; message may redeliver",
+                    event_id,
+                )
