@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from collections import defaultdict
+from collections.abc import Sequence
+from typing import Any
+
+import nats
+from litestar.events import BaseEventEmitterBackend, EventListener
+from nats.aio.client import Client as NATSClient
+from nats.aio.msg import Msg
+from nats.aio.subscription import Subscription
+
+logger = logging.getLogger(__name__)
+
+_VALID_SUBJECT_TOKEN = re.compile(r"^[^\s*>.]+$")
+
+
+def _validate_subject(subject: str) -> None:
+    if not subject:
+        raise ValueError("NATS subject must not be empty.")
+    tokens = subject.split(".")
+    for token in tokens:
+        if not _VALID_SUBJECT_TOKEN.match(token):
+            raise ValueError(
+                f"Invalid NATS subject {subject!r}: tokens must be non-empty "
+                "and must not contain whitespace, '*', or '>'."
+            )
+
+
+class NATSEventEmitter(BaseEventEmitterBackend):
+    """A Litestar event emitter backend backed by core NATS pub/sub.
+
+    Delivery semantics:
+      - At-most-once, fire-and-forget. Events published to a subject with no
+        active subscriber are dropped. Core NATS has no buffer or persistence;
+        for durability use JetStream (not implemented by this backend).
+      - Listener exceptions are caught per-listener; siblings still complete.
+      - Every app instance receives every event (broadcast/fanout).
+
+    Subject layout:
+      - One NATS subject per registered event id:
+        ``f"{subject_prefix}{event_id}"``.
+      - Default prefix ``"litestar.events."`` follows NATS dot-separated
+        token convention.
+      - Exact ``SUB`` (no wildcards): the set of subjects is the closed set
+        of event ids attached to ``listeners`` at app construction.
+      - Inspect from the NATS CLI with ``nats sub 'litestar.events.>'``.
+
+    Subject validation:
+      - The combination of prefix + event id is validated at ``__aenter__``.
+        Tokens (between dots) must not be empty or contain whitespace,
+        ``*``, or ``>`` (which are reserved as NATS wildcards).
+      - Litestar's canonical snake_case event ids always pass.
+
+    Not suitable for:
+      - durability across restarts (use the rabbit backend or NATS JetStream),
+      - work-queue / single-consumer semantics (use the rabbit backend with
+        a shared ``queue_name``, or NATS queue groups via a future
+        ``queue_group`` argument).
+    """
+
+    def __init__(
+        self,
+        listeners: Sequence[EventListener],
+        *,
+        servers: str | Sequence[str] = "nats://localhost:4222",
+        subject_prefix: str = "litestar.events.",
+    ) -> None:
+        super().__init__(listeners)
+        self._servers = servers
+        self._subject_prefix = subject_prefix
+
+        self._by_event: dict[str, list[EventListener]] = defaultdict(list)
+        for listener in listeners:
+            for event_id in listener.event_ids:
+                self._by_event[event_id].append(listener)
+
+        self._client: NATSClient | None = None
+        self._subscriptions: list[Subscription] = []
+        self._publish_queue: asyncio.Queue[
+            tuple[str, tuple[Any, ...], dict[str, Any]]
+        ] | None = None
+        self._publisher_task: asyncio.Task[None] | None = None
+
+    def _subject(self, event_id: str) -> str:
+        return f"{self._subject_prefix}{event_id}"
+
+    async def __aenter__(self) -> "NATSEventEmitter":
+        for event_id in self._by_event:
+            try:
+                _validate_subject(self._subject(event_id))
+            except ValueError as exc:
+                raise ValueError(
+                    f"event_id {event_id!r} produces an invalid NATS "
+                    f"subject. {exc}"
+                ) from exc
+
+        self._client = await nats.connect(servers=self._servers)
+
+        for event_id in self._by_event:
+            subject = self._subject(event_id)
+            sub = await self._client.subscribe(
+                subject,
+                cb=self._make_callback(event_id),
+            )
+            self._subscriptions.append(sub)
+
+        self._publish_queue = asyncio.Queue()
+        self._publisher_task = asyncio.create_task(self._publisher_loop())
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._publisher_task is not None:
+            self._publisher_task.cancel()
+            try:
+                await self._publisher_task
+            except asyncio.CancelledError:
+                pass
+
+        for sub in self._subscriptions:
+            try:
+                await sub.unsubscribe()
+            except Exception:
+                logger.exception("Failed to unsubscribe from %s", sub.subject)
+
+        if self._client is not None:
+            await self._client.drain()
+            await self._client.close()
+
+    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
+        if self._publish_queue is None:
+            raise RuntimeError("Emitter used outside its async context")
+        self._publish_queue.put_nowait((event_id, args, kwargs))
+
+    async def _publisher_loop(self) -> None:
+        assert self._publish_queue is not None
+        assert self._client is not None
+        while True:
+            event_id, args, kwargs = await self._publish_queue.get()
+            try:
+                body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
+                await self._client.publish(self._subject(event_id), body)
+            except Exception:
+                logger.exception("Failed to publish event %s", event_id)
+
+    def _make_callback(self, event_id: str):
+        listeners = self._by_event[event_id]
+
+        async def _callback(msg: Msg) -> None:
+            try:
+                payload = json.loads(msg.data)
+                args = payload.get("args", [])
+                kwargs = payload.get("kwargs", {})
+            except Exception:
+                logger.exception(
+                    "Dropping unparseable message on subject %s", msg.subject
+                )
+                return
+
+            async def _run_one(listener: EventListener) -> None:
+                try:
+                    await listener.fn(*args, **kwargs)
+                except Exception:
+                    logger.exception(
+                        "Listener %s failed for event %s",
+                        getattr(listener.fn, "__name__", repr(listener.fn)),
+                        event_id,
+                    )
+
+            await asyncio.gather(
+                *(_run_one(listener) for listener in listeners),
+                return_exceptions=True,
+            )
+
+        return _callback
