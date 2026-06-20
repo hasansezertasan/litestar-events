@@ -17,7 +17,7 @@ mqtt = ["aiomqtt>=2"]
 nats = ["nats-py>=2.12.0,<=3.0.0"]
 postgres = ["psycopg[pool]>=3.2.0"]
 rabbit = ["aio-pika>=9,<10"]
-redis = ["redis>=5.0.0,<8.0.0"]
+redis = ["redis>=8.0.0,<8.1.0"]
 
 [dependency-groups]
 optionals = ["litestar-events[confluent,kafka,mqtt,nats,postgres,rabbit,redis]"]
