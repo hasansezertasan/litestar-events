@@ -19,7 +19,7 @@ postgres = ["psycopg[pool]>=3.2.0"]
 pubsub = ["gcloud-aio-pubsub>=5,<7"]
 rabbit = ["aio-pika>=9,<10"]
 redis = ["redis>=8.0.0,<8.1.0"]
-sqs = ["aiobotocore>=2,<3"]
+sqs = ["aiobotocore>=3,<4"]
 zmq = ["pyzmq>=25,<28"]
 
 [dependency-groups]
