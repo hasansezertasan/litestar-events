@@ -27,6 +27,9 @@ ergonomics while swapping the transport underneath.
 | Redis      | `redis`       | [`redis`](https://github.com/redis/redis-py) (async) |
 | MQTT       | `mqtt`        | [`aiomqtt`](https://github.com/empicano/aiomqtt) |
 | PostgreSQL | `postgres`    | [`psycopg`](https://www.psycopg.org/psycopg3/) (`LISTEN/NOTIFY`) |
+| AWS SQS    | `sqs`         | [`aiobotocore`](https://github.com/aio-libs/aiobotocore) |
+| GCP Pub/Sub| `pubsub`      | [`gcloud-aio-pubsub`](https://github.com/talkiq/gcloud-aio) |
+| ZeroMQ     | `zmq`         | [`pyzmq`](https://pyzmq.readthedocs.io) (brokerless) |
 
 ## Installation
 
@@ -154,6 +157,67 @@ app = Litestar(
 )
 ```
 
+#### AWS SQS (durable, at-least-once, managed)
+
+```python
+from functools import partial
+
+from litestar import Litestar
+
+from litestar_events.contrib.sqs import SQSEventEmitter
+
+app = Litestar(
+    route_handlers=[register_user],
+    listeners=[send_welcome_email, record_analytics],
+    event_emitter_backend=partial(
+        SQSEventEmitter,
+        queue_name="litestar-events",
+        region_name="eu-central-1",
+        # credentials come from the standard boto chain (env, instance role, ...)
+    ),
+)
+```
+
+#### GCP Pub/Sub (durable, broadcast fanout)
+
+```python
+from functools import partial
+
+from litestar import Litestar
+
+from litestar_events.contrib.pubsub import PubSubEventEmitter
+
+app = Litestar(
+    route_handlers=[register_user],
+    listeners=[send_welcome_email, record_analytics],
+    event_emitter_backend=partial(
+        PubSubEventEmitter,
+        project_id="my-gcp-project",
+        topic_id="litestar-events",
+        # subscription_name="my-app",  # set for work-queue across replicas
+    ),
+)
+```
+
+#### ZeroMQ (brokerless, fire-and-forget)
+
+```python
+from functools import partial
+
+from litestar import Litestar
+
+from litestar_events.contrib.zmq import ZeroMQEventEmitter
+
+app = Litestar(
+    route_handlers=[register_user],
+    listeners=[send_welcome_email, record_analytics],
+    event_emitter_backend=partial(
+        ZeroMQEventEmitter,
+        pub_address="tcp://127.0.0.1:5557",
+    ),
+)
+```
+
 ### 3. Trigger an event
 
 ```bash
@@ -178,6 +242,9 @@ Runnable examples for each backend live under [`examples/`](./examples):
 - [`examples/redis`](./examples/redis) — Redis Pub/Sub
 - [`examples/mqtt`](./examples/mqtt) — MQTT
 - [`examples/postgres`](./examples/postgres) — PostgreSQL `LISTEN/NOTIFY`
+- [`examples/sqs`](./examples/sqs) — AWS SQS (LocalStack-friendly)
+- [`examples/pubsub`](./examples/pubsub) — GCP Pub/Sub (emulator-friendly)
+- [`examples/zmq`](./examples/zmq) — ZeroMQ (brokerless PUB/SUB)
 
 ## Delivery semantics
 
@@ -188,6 +255,14 @@ you weaken or tune those guarantees via constructor arguments:
 - **RabbitMQ** — at-least-once with per-listener error isolation and a
   dead-letter exchange for unparseable messages.
 - **Kafka / Confluent** — at-least-once with consumer-group offsets.
+- **AWS SQS** — at-least-once and durable; a message is deleted only after its
+  listeners run. Instances sharing one queue are competing consumers
+  (work-queue); broadcast fanout requires fronting the queue with SNS.
+- **GCP Pub/Sub** — at-least-once and durable. Each instance gets its own
+  subscription by default (broadcast fanout); a shared `subscription_name`
+  gives work-queue semantics.
+- **ZeroMQ** — fire-and-forget, at-most-once, brokerless. Events emitted before
+  a subscriber finishes connecting are lost (no buffer, no persistence).
 - **NATS** — at-most-once by default; JetStream-backed at-least-once when
   configured.
 - **Redis / MQTT / Postgres `LISTEN/NOTIFY`** — fire-and-forget pub/sub; events

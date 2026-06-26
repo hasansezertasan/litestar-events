@@ -38,6 +38,27 @@ def postgres_dsn():
 
 
 @pytest.fixture(scope="session")
+def sqs_endpoint():
+    from testcontainers.localstack import LocalStackContainer
+
+    with LocalStackContainer("localstack/localstack:3").with_services("sqs") as c:
+        yield c.get_url()
+
+
+@pytest.fixture(scope="session")
+def pubsub_emulator():
+    from testcontainers.core.container import DockerContainer
+    from testcontainers.core.waiting_utils import wait_for_logs
+
+    container = DockerContainer(
+        "messagebird/gcloud-pubsub-emulator:latest"
+    ).with_exposed_ports(8681)
+    with container as c:
+        wait_for_logs(c, "Server started", timeout=60)
+        yield f"{c.get_container_host_ip()}:{c.get_exposed_port(8681)}"
+
+
+@pytest.fixture(scope="session")
 def kafka_bootstrap():
     from testcontainers.kafka import KafkaContainer
 

@@ -17,8 +17,11 @@ BACKENDS = [
     ("litestar_events.contrib.mqtt", "MQTTEventEmitter"),
     ("litestar_events.contrib.nats", "NATSEventEmitter"),
     ("litestar_events.contrib.postgres", "PostgresEventEmitter"),
+    ("litestar_events.contrib.pubsub", "PubSubEventEmitter"),
     ("litestar_events.contrib.rabbit", "RabbitEventEmitter"),
     ("litestar_events.contrib.redis", "RedisEventEmitter"),
+    ("litestar_events.contrib.sqs", "SQSEventEmitter"),
+    ("litestar_events.contrib.zmq", "ZeroMQEventEmitter"),
 ]
 
 
@@ -43,6 +46,8 @@ def test_backend_constructs_with_empty_listeners(module_path, class_name):
     cls = getattr(mod, class_name)
     if class_name == "PostgresEventEmitter":
         instance = cls([], dsn="postgresql://localhost/x")
+    elif class_name == "PubSubEventEmitter":
+        instance = cls([], project_id="test-project")
     else:
         instance = cls([])
     assert isinstance(instance, BaseEventEmitterBackend)
