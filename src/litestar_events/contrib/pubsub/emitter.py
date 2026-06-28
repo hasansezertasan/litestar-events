@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any
@@ -50,8 +49,9 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
       - Production uses the standard GCP credential chain
         (``GOOGLE_APPLICATION_CREDENTIALS`` etc.).
       - ``emulator_host`` (``host:port``) targets a local Pub/Sub emulator; it
-        sets ``PUBSUB_EMULATOR_HOST`` so gcloud-aio skips auth. Mainly for dev
-        and tests.
+        is passed as an explicit ``api_root`` to each client so gcloud-aio skips
+        auth, without touching the process-wide ``PUBSUB_EMULATOR_HOST``. Mainly
+        for dev and tests.
     """
 
     def __init__(
@@ -108,10 +108,11 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
                 raise
 
     async def __aenter__(self) -> "PubSubEventEmitter":
-        if self._emulator_host:
-            os.environ.setdefault("PUBSUB_EMULATOR_HOST", self._emulator_host)
+        api_root = (
+            f"http://{self._emulator_host}/v1" if self._emulator_host else None
+        )
 
-        self._publisher = PublisherClient()
+        self._publisher = PublisherClient(api_root=api_root)
         self._topic = f"projects/{self._project_id}/topics/{self._topic_id}"
         if self._create_resources:
             await self._ensure_topic()
@@ -125,7 +126,7 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         self._publisher_task = asyncio.create_task(self._publisher_loop())
 
         if self._by_event:
-            self._subscriber = SubscriberClient()
+            self._subscriber = SubscriberClient(api_root=api_root)
             if self._create_resources:
                 await self._ensure_subscription()
             self._consumer_task = asyncio.create_task(self._run_subscribe())
