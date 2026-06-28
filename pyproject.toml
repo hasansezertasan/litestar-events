@@ -183,6 +183,22 @@ warn_unused_ignores = true
 module = "tests.*"
 disallow_untyped_decorators = false
 
+[tool.basedpyright]
+# Paths resolve relative to this file (repo root), so no separate
+# pyrightconfig.json is needed.
+disableBytesTypePromotions = true
+include = ["src", "tests"]
+pythonVersion = "3.10"
+reportMissingTypeStubs = false
+reportPrivateImportUsage = true
+reportUnknownMemberType = false
+reportUnnecessaryTypeIgnoreComment = true
+reportUnusedFunction = false
+reportFunctionMemberAccess = false
+typeCheckingMode = "standard"
+venv = ".venv"
+venvPath = "."
+
 [tool.vulture]
 exclude = ["*/.venv/*.py"]
 ignore_names = ["cls", "start", "test_broker", "TracebackType"]
