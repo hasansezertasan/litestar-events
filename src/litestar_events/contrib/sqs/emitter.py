@@ -7,7 +7,6 @@ from collections import defaultdict
 from contextlib import AsyncExitStack, suppress
 from typing import TYPE_CHECKING, Any
 
-from aiobotocore.session import get_session
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
@@ -115,6 +114,8 @@ class SQSEventEmitter(BaseEventEmitterBackend):
             return resp["QueueUrl"]
 
     async def __aenter__(self) -> Self:
+        from aiobotocore.session import get_session
+
         self._stack = AsyncExitStack()
         session = get_session()
         # Separate clients for publishing and the long-poll consumer so a

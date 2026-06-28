@@ -7,13 +7,13 @@ import logging
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-import zmq
-import zmq.asyncio
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    import zmq.asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,9 @@ class ZeroMQEventEmitter(BaseEventEmitterBackend):
         self._consumer_task: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> Self:
+        import zmq
+        import zmq.asyncio
+
         self._ctx = zmq.asyncio.Context()
         self._pub = self._ctx.socket(zmq.PUB)
         self._pub.bind(self._pub_address)

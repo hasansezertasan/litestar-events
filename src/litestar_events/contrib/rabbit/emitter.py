@@ -7,13 +7,13 @@ import logging
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-import aio_pika
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    import aio_pika
     from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,8 @@ class RabbitEventEmitter(BaseEventEmitterBackend):
         self._publisher_task: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> Self:
+        import aio_pika
+
         self._connection = await aio_pika.connect_robust(self._amqp_url)
 
         pub_channel = await self._connection.channel(publisher_confirms=True)
@@ -119,6 +121,8 @@ class RabbitEventEmitter(BaseEventEmitterBackend):
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
+        import aio_pika
+
         assert self._publish_queue is not None
         assert self._exchange is not None
         while True:

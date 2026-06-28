@@ -9,12 +9,12 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
 from litestar.events import BaseEventEmitterBackend, EventListener
-from psycopg.sql import SQL, Identifier
-from psycopg_pool import AsyncConnectionPool
 from typing_extensions import Self
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,8 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
         return f"{self._channel_prefix}{event_id}"
 
     async def __aenter__(self) -> Self:
+        from psycopg_pool import AsyncConnectionPool
+
         for event_id in self._by_event:
             try:
                 _validate_channel(self._channel(event_id))
@@ -163,6 +165,8 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
+        from psycopg.sql import SQL, Identifier
+
         assert self._pool is not None
         prefix_len = len(self._channel_prefix)
         async with self._pool.connection() as conn:

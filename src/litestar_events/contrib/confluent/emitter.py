@@ -10,12 +10,13 @@ import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-from confluent_kafka import Consumer, KafkaException, Producer
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from confluent_kafka import Consumer, Producer
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,8 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
         return f"{self._topic_prefix}{event_id}"
 
     async def __aenter__(self) -> Self:
+        from confluent_kafka import Consumer, Producer
+
         for event_id in self._by_event:
             try:
                 _validate_topic(self._topic(event_id))
@@ -210,6 +213,8 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
+        from confluent_kafka import KafkaException
+
         assert self._consumer is not None
         prefix_len = len(self._topic_prefix)
         while not self._stopping:

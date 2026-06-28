@@ -8,12 +8,13 @@ import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-import aiomqtt
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    import aiomqtt
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,8 @@ class MQTTEventEmitter(BaseEventEmitterBackend):
         return f"{self._topic_prefix}{event_id}"
 
     async def __aenter__(self) -> Self:
+        import aiomqtt
+
         for event_id in self._by_event:
             try:
                 _validate_topic(self._topic(event_id))

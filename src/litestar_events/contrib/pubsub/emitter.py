@@ -9,19 +9,17 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from aiohttp import ClientResponseError
-from gcloud.aio.pubsub import (
-    PublisherClient,
-    PubsubMessage,
-    SubscriberClient,
-    SubscriberMessage,
-    subscribe,
-)
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from gcloud.aio.pubsub import (
+        PublisherClient,
+        SubscriberClient,
+        SubscriberMessage,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +92,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         self._consumer_task: asyncio.Task[None] | None = None
 
     async def _ensure_topic(self) -> None:
+        from aiohttp import ClientResponseError
+
         assert self._publisher is not None
         try:
             await self._publisher.create_topic(self._topic)
@@ -102,6 +102,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
                 raise
 
     async def _ensure_subscription(self) -> None:
+        from aiohttp import ClientResponseError
+
         assert self._subscriber is not None
         try:
             await self._subscriber.create_subscription(
@@ -113,6 +115,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
                 raise
 
     async def __aenter__(self) -> Self:
+        from gcloud.aio.pubsub import PublisherClient, SubscriberClient
+
         if self._emulator_host:
             os.environ.setdefault("PUBSUB_EMULATOR_HOST", self._emulator_host)
 
@@ -166,6 +170,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
+        from gcloud.aio.pubsub import PubsubMessage
+
         assert self._publish_queue is not None
         assert self._publisher is not None
         while True:
@@ -180,6 +186,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _run_subscribe(self) -> None:
+        from gcloud.aio.pubsub import subscribe
+
         assert self._subscriber is not None
         await subscribe(
             self._subscription,
@@ -193,6 +201,9 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
     async def _handle_message(self, message: SubscriberMessage) -> None:
         event_id = (message.attributes or {}).get("event_id", "")
         if message.data is None:
+            logger.warning(
+                "Dropping Pub/Sub message with no data (event_id=%s)", event_id
+            )
             return
         try:
             payload = json.loads(message.data)

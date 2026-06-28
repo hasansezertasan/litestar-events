@@ -8,12 +8,12 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
 from litestar.events import BaseEventEmitterBackend, EventListener
-from redis.asyncio import Redis
 from typing_extensions import Self
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from redis.asyncio import Redis
     from redis.asyncio.client import PubSub
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,8 @@ class RedisEventEmitter(BaseEventEmitterBackend):
         return f"{self._channel_prefix}{event_id}"
 
     async def __aenter__(self) -> Self:
+        from redis.asyncio import Redis
+
         self._client = Redis.from_url(self._redis_url)
         self._pubsub = self._client.pubsub()
 

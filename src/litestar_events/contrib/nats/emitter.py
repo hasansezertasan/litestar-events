@@ -8,7 +8,6 @@ import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-import nats
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
@@ -99,6 +98,8 @@ class NATSEventEmitter(BaseEventEmitterBackend):
         return f"{self._subject_prefix}{event_id}"
 
     async def __aenter__(self) -> Self:
+        import nats
+
         for event_id in self._by_event:
             try:
                 _validate_subject(self._subject(event_id))
