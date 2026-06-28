@@ -125,7 +125,12 @@ class MQTTEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             identifier=self._client_id,
         )
         self._client = await self._client_cm.__aenter__()
-        assert self._client is not None
+        # Guard (not assert) the external CM contract: stripped asserts under
+        # `python -O` would defer a None here to an opaque AttributeError on the
+        # subscribe/publish call below.
+        if self._client is None:
+            msg = "aiomqtt client context manager returned no client"
+            raise RuntimeError(msg)
 
         for event_id in self._by_event:
             await self._client.subscribe(self._topic(event_id), qos=self._qos)

@@ -35,6 +35,7 @@ test = [
 lint = [
     "ruff>=0.15",
     "mypy>=1.13",
+    "basedpyright>=1.39",
 ]
 dev = [
     { include-group = "optionals" },

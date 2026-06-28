@@ -209,7 +209,7 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        from confluent_kafka import KafkaException
+        from confluent_kafka import KafkaError, KafkaException
 
         assert self._consumer is not None
         prefix_len = len(self._topic_prefix)
@@ -222,7 +222,15 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             if msg is None:
                 continue
             if msg.error():
-                logger.error("Consumer error: %s", msg.error())
+                err = msg.error()
+                if err.code() == KafkaError._PARTITION_EOF:
+                    continue  # benign end-of-partition marker
+                if err.fatal():
+                    # Unrecoverable: stop consuming rather than spin the loop
+                    # re-logging the same error every poll.
+                    logger.critical("Fatal Kafka consumer error; stopping: %s", err)
+                    break
+                logger.error("Consumer error: %s", err)
                 continue
 
             topic = msg.topic() or ""

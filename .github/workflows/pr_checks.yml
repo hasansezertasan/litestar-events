@@ -33,7 +33,9 @@ jobs:
       - name: Prek checks
         uses: j178/prek-action@bdca6f102f98e2b4c7029491a53dfd366469e33d  # v2.0.4
       - name: Commit formatting and linting fixes
-        if: failure()
+        # Skip on fork PRs: the default token has no write access to the fork,
+        # so the auto-commit would fail confusingly instead of being a no-op.
+        if: failure() && github.event.pull_request.head.repo.full_name == github.repository
         uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9  # v7.1.0
         with:
           commit_message: "style: apply formatting and linting fixes"

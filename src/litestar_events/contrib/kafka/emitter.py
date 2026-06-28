@@ -155,6 +155,7 @@ class KafkaEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             event_id = topic[prefix_len:]
             value = msg.value
             if value is None:  # tombstone / empty record
+                logger.debug("Skipping tombstone record on topic %s", topic)
                 continue
             try:
                 payload = json.loads(value)
