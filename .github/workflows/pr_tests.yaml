@@ -28,7 +28,9 @@ jobs:
         with:
           python-version: "3.14"
       - run: uv sync --group dev
-      - run: uv run ruff check src/ tests/
+      # --no-fix: pyproject sets fix=true for local dev, but CI must report
+      # (not silently auto-fix) violations or the gate passes on fixable issues.
+      - run: uv run ruff check --no-fix src/ tests/
       - run: uv run ruff format --check src/ tests/
       - run: uv run mypy src/
   test:
