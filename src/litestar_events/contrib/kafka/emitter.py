@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
+from litestar_events._queue import QueuedEmitterMixin
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -33,7 +35,7 @@ def _validate_topic(topic: str) -> None:
         )
 
 
-class KafkaEventEmitter(BaseEventEmitterBackend):
+class KafkaEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by ``aiokafka`` (pure-Python Kafka).
 
     Delivery semantics:
@@ -133,12 +135,6 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
             await self._consumer.stop()
         if self._producer is not None:
             await self._producer.stop()
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            msg = "Emitter used outside its async context"
-            raise RuntimeError(msg)
-        self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
         assert self._publish_queue is not None

@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
+from litestar_events._queue import QueuedEmitterMixin
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -18,7 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ZeroMQEventEmitter(BaseEventEmitterBackend):
+class ZeroMQEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by ZeroMQ PUB/SUB sockets.
 
     ZeroMQ is *brokerless*: there is no server to operate. Each emitter binds a
@@ -109,12 +111,6 @@ class ZeroMQEventEmitter(BaseEventEmitterBackend):
                     await task
         if self._ctx is not None:
             self._ctx.destroy(linger=0)
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            msg = "Emitter used outside its async context"
-            raise RuntimeError(msg)
-        self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
         assert self._publish_queue is not None

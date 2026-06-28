@@ -10,13 +10,15 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
+from litestar_events._queue import QueuedEmitterMixin
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
 
-class SQSEventEmitter(BaseEventEmitterBackend):
+class SQSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by AWS SQS via aiobotocore.
 
     Delivery semantics:
@@ -144,12 +146,6 @@ class SQSEventEmitter(BaseEventEmitterBackend):
                     await task
         if self._stack is not None:
             await self._stack.aclose()
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            msg = "Emitter used outside its async context"
-            raise RuntimeError(msg)
-        self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
         assert self._publish_queue is not None

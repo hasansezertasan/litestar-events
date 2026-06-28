@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
+from litestar_events._queue import QueuedEmitterMixin
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
@@ -39,7 +41,7 @@ def _validate_subject(subject: str) -> None:
             )
 
 
-class NATSEventEmitter(BaseEventEmitterBackend):
+class NATSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by core NATS pub/sub.
 
     Delivery semantics:
@@ -141,12 +143,6 @@ class NATSEventEmitter(BaseEventEmitterBackend):
         if self._client is not None:
             await self._client.drain()
             await self._client.close()
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            msg = "Emitter used outside its async context"
-            raise RuntimeError(msg)
-        self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
         assert self._publish_queue is not None

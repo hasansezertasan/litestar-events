@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
+from litestar_events._queue import QueuedEmitterMixin
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -19,7 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class RabbitEventEmitter(BaseEventEmitterBackend):
+class RabbitEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by RabbitMQ via aio-pika.
 
     Delivery semantics:
@@ -113,12 +115,6 @@ class RabbitEventEmitter(BaseEventEmitterBackend):
                 await self._publisher_task
         if self._connection is not None:
             await self._connection.close()
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            msg = "Emitter used outside its async context"
-            raise RuntimeError(msg)
-        self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
         import aio_pika

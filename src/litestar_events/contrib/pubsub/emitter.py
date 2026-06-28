@@ -11,6 +11,8 @@ from uuid import uuid4
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
+from litestar_events._queue import QueuedEmitterMixin
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -23,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class PubSubEventEmitter(BaseEventEmitterBackend):
+class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by GCP Pub/Sub via gcloud-aio.
 
     Delivery semantics:
@@ -161,12 +163,6 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
             await self._subscriber.close()
         if self._publisher is not None:
             await self._publisher.close()
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            msg = "Emitter used outside its async context"
-            raise RuntimeError(msg)
-        self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
         from gcloud.aio.pubsub import PubsubMessage

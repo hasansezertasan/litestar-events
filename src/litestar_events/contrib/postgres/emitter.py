@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
+from litestar_events._queue import QueuedEmitterMixin
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -37,7 +39,7 @@ def _validate_channel(channel: str) -> None:
         )
 
 
-class PostgresEventEmitter(BaseEventEmitterBackend):
+class PostgresEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by PostgreSQL ``LISTEN/NOTIFY``.
 
     Delivery semantics:
@@ -142,12 +144,6 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
                     await task
         if self._owns_pool and self._pool is not None:
             await self._pool.close()
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            msg = "Emitter used outside its async context"
-            raise RuntimeError(msg)
-        self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
         assert self._publish_queue is not None
