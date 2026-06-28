@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +23,12 @@ _VALID_KAFKA_TOPIC = re.compile(r"^[A-Za-z0-9._-]{1,249}$")
 
 def _validate_topic(topic: str) -> None:
     if not _VALID_KAFKA_TOPIC.match(topic):
-        raise ValueError(
+        msg = (
             f"Invalid Kafka topic {topic!r}. Topics must match "
             "[A-Za-z0-9._-] and be 1..249 chars."
+        )
+        raise ValueError(
+            msg,
         )
 
 
@@ -74,22 +81,23 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
 
         self._producer: AIOKafkaProducer | None = None
         self._consumer: AIOKafkaConsumer | None = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
     def _topic(self, event_id: str) -> str:
         return f"{self._topic_prefix}{event_id}"
 
-    async def __aenter__(self) -> "KafkaEventEmitter":
+    async def __aenter__(self) -> Self:
         for event_id in self._by_event:
             try:
                 _validate_topic(self._topic(event_id))
             except ValueError as exc:
+                msg = f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
                 raise ValueError(
-                    f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
+                    msg,
                 ) from exc
 
         self._producer = AIOKafkaProducer(bootstrap_servers=self._bootstrap_servers)
@@ -115,10 +123,8 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         if self._consumer is not None:
             await self._consumer.stop()
@@ -127,7 +133,8 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
@@ -147,8 +154,11 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
         async for msg in self._consumer:
             topic = msg.topic
             event_id = topic[prefix_len:]
+            value = msg.value
+            if value is None:  # tombstone / empty record
+                continue
             try:
-                payload = json.loads(msg.value)
+                payload = json.loads(value)
                 args = payload.get("args", [])
                 kwargs = payload.get("kwargs", {})
             except Exception:

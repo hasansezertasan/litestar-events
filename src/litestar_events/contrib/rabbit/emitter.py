@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aio_pika
-from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 
 logger = logging.getLogger(__name__)
 
@@ -56,24 +61,29 @@ class RabbitEventEmitter(BaseEventEmitterBackend):
 
         self._connection: AbstractRobustConnection | None = None
         self._exchange: aio_pika.abc.AbstractExchange | None = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
 
-    async def __aenter__(self) -> "RabbitEventEmitter":
+    async def __aenter__(self) -> Self:
         self._connection = await aio_pika.connect_robust(self._amqp_url)
 
         pub_channel = await self._connection.channel(publisher_confirms=True)
         self._exchange = await pub_channel.declare_exchange(
-            self._exchange_name, aio_pika.ExchangeType.TOPIC, durable=True
+            self._exchange_name,
+            aio_pika.ExchangeType.TOPIC,
+            durable=True,
         )
 
         dlx = await pub_channel.declare_exchange(
-            self._dlx_name, aio_pika.ExchangeType.TOPIC, durable=True
+            self._dlx_name,
+            aio_pika.ExchangeType.TOPIC,
+            durable=True,
         )
         dl_queue = await pub_channel.declare_queue(
-            f"{self._exchange_name}.dead", durable=True
+            f"{self._exchange_name}.dead",
+            durable=True,
         )
         await dl_queue.bind(dlx, routing_key="#")
 
@@ -97,16 +107,15 @@ class RabbitEventEmitter(BaseEventEmitterBackend):
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
         if self._publisher_task is not None:
             self._publisher_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
-            except asyncio.CancelledError:
-                pass
         if self._connection is not None:
             await self._connection.close()
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:

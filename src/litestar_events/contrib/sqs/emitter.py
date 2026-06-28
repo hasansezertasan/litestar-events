@@ -4,12 +4,15 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
-from contextlib import AsyncExitStack
-from typing import Any
+from contextlib import AsyncExitStack, suppress
+from typing import TYPE_CHECKING, Any
 
 from aiobotocore.session import get_session
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +89,9 @@ class SQSEventEmitter(BaseEventEmitterBackend):
         self._stack: AsyncExitStack | None = None
         self._pub_client: Any = None
         self._sub_client: Any = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
@@ -111,16 +114,16 @@ class SQSEventEmitter(BaseEventEmitterBackend):
             resp = await self._pub_client.create_queue(QueueName=self._queue_name)
             return resp["QueueUrl"]
 
-    async def __aenter__(self) -> "SQSEventEmitter":
+    async def __aenter__(self) -> Self:
         self._stack = AsyncExitStack()
         session = get_session()
         # Separate clients for publishing and the long-poll consumer so a
         # blocking ReceiveMessage never starves SendMessage.
         self._pub_client = await self._stack.enter_async_context(
-            self._create_client(session)
+            self._create_client(session),
         )
         self._sub_client = await self._stack.enter_async_context(
-            self._create_client(session)
+            self._create_client(session),
         )
 
         if self._queue_url is None:
@@ -136,16 +139,15 @@ class SQSEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         if self._stack is not None:
             await self._stack.aclose()
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
@@ -158,7 +160,7 @@ class SQSEventEmitter(BaseEventEmitterBackend):
                     QueueUrl=self._queue_url,
                     MessageBody=body,
                     MessageAttributes={
-                        "event_id": {"DataType": "String", "StringValue": event_id}
+                        "event_id": {"DataType": "String", "StringValue": event_id},
                     },
                 )
             except Exception:
@@ -194,7 +196,7 @@ class SQSEventEmitter(BaseEventEmitterBackend):
         except Exception:
             logger.exception(
                 "Dropping unparseable SQS message "
-                "(configure a redrive DLQ to retain it instead)"
+                "(configure a redrive DLQ to retain it instead)",
             )
             await self._delete(receipt)
             return
@@ -223,7 +225,8 @@ class SQSEventEmitter(BaseEventEmitterBackend):
     async def _delete(self, receipt: str) -> None:
         try:
             await self._sub_client.delete_message(
-                QueueUrl=self._queue_url, ReceiptHandle=receipt
+                QueueUrl=self._queue_url,
+                ReceiptHandle=receipt,
             )
         except Exception:
             logger.exception("Failed to delete SQS message; it will be redelivered")

@@ -13,7 +13,7 @@ import pytest
 class TestPostgresValidator:
     """psycopg LISTEN/NOTIFY channels must be valid PG identifiers."""
 
-    @pytest.fixture
+    @pytest.fixture()
     def _validate(self):
         from litestar_events.contrib.postgres.emitter import _validate_channel
 
@@ -21,20 +21,20 @@ class TestPostgresValidator:
 
     @pytest.mark.parametrize(
         "channel",
-        [
+        (
             "user_registered",
             "litestar_events_user_registered",
             "_leading_underscore",
             "with$dollar",
             "Mixed_Case_42",
-        ],
+        ),
     )
-    def test_accepts_valid(self, _validate, channel):
+    def test_accepts_valid(self, _validate, channel) -> None:
         _validate(channel)
 
     @pytest.mark.parametrize(
         "channel",
-        [
+        (
             "",
             "1leading_digit",
             "user.registered",
@@ -42,9 +42,9 @@ class TestPostgresValidator:
             "user:registered",
             "has space",
             "a" * 64,  # 64 bytes — one past the 63-byte limit
-        ],
+        ),
     )
-    def test_rejects_invalid(self, _validate, channel):
+    def test_rejects_invalid(self, _validate, channel) -> None:
         with pytest.raises(ValueError):
             _validate(channel)
 
@@ -52,7 +52,7 @@ class TestPostgresValidator:
 class TestNATSValidator:
     """NATS subjects are dot-separated; tokens may not contain spaces, *, or >."""
 
-    @pytest.fixture
+    @pytest.fixture()
     def _validate(self):
         from litestar_events.contrib.nats.emitter import _validate_subject
 
@@ -60,20 +60,20 @@ class TestNATSValidator:
 
     @pytest.mark.parametrize(
         "subject",
-        [
+        (
             "user_registered",
             "litestar.events.user_registered",
             "a.b.c.d",
             "has-dashes",
             "has:colons",
-        ],
+        ),
     )
-    def test_accepts_valid(self, _validate, subject):
+    def test_accepts_valid(self, _validate, subject) -> None:
         _validate(subject)
 
     @pytest.mark.parametrize(
         "subject",
-        [
+        (
             "",
             "trailing.",
             ".leading",
@@ -81,9 +81,9 @@ class TestNATSValidator:
             "with space",
             "with*star",
             "with>angle",
-        ],
+        ),
     )
-    def test_rejects_invalid(self, _validate, subject):
+    def test_rejects_invalid(self, _validate, subject) -> None:
         with pytest.raises(ValueError):
             _validate(subject)
 
@@ -101,29 +101,29 @@ class TestKafkaValidator:
 
     @pytest.mark.parametrize(
         "topic",
-        [
+        (
             "user_registered",
             "litestar.events.user_registered",
             "with-dashes",
             "with.dots",
             "1leading_digit_is_fine_in_kafka",
             "a" * 249,
-        ],
+        ),
     )
-    def test_accepts_valid(self, _validate, topic):
+    def test_accepts_valid(self, _validate, topic) -> None:
         _validate(topic)
 
     @pytest.mark.parametrize(
         "topic",
-        [
+        (
             "",
             "has space",
             "has:colon",
             "has/slash",
             "a" * 250,
-        ],
+        ),
     )
-    def test_rejects_invalid(self, _validate, topic):
+    def test_rejects_invalid(self, _validate, topic) -> None:
         with pytest.raises(ValueError):
             _validate(topic)
 
@@ -131,7 +131,7 @@ class TestKafkaValidator:
 class TestMQTTValidator:
     """MQTT topics: anything except + (wildcard), # (wildcard), NUL, empty."""
 
-    @pytest.fixture
+    @pytest.fixture()
     def _validate(self):
         from litestar_events.contrib.mqtt.emitter import _validate_topic
 
@@ -139,26 +139,26 @@ class TestMQTTValidator:
 
     @pytest.mark.parametrize(
         "topic",
-        [
+        (
             "user_registered",
             "litestar/events/user_registered",
             "has-dashes",
             "has.dots",
             "even spaces are fine in mqtt",
-        ],
+        ),
     )
-    def test_accepts_valid(self, _validate, topic):
+    def test_accepts_valid(self, _validate, topic) -> None:
         _validate(topic)
 
     @pytest.mark.parametrize(
         "topic",
-        [
+        (
             "",
             "litestar/+/oops",
             "litestar/#",
             "has\x00nul",
-        ],
+        ),
     )
-    def test_rejects_invalid(self, _validate, topic):
+    def test_rejects_invalid(self, _validate, topic) -> None:
         with pytest.raises(ValueError):
             _validate(topic)

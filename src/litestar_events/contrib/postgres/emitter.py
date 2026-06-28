@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from litestar.events import BaseEventEmitterBackend, EventListener
 from psycopg.sql import SQL, Identifier
 from psycopg_pool import AsyncConnectionPool
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +23,17 @@ _VALID_PG_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 def _validate_channel(channel: str) -> None:
     if not _VALID_PG_IDENT.match(channel):
-        raise ValueError(
+        msg = (
             f"Invalid PostgreSQL channel name {channel!r}. "
             "Channel names must match [A-Za-z_][A-Za-z0-9_$]*."
         )
-    if len(channel.encode("utf-8")) > 63:
         raise ValueError(
-            f"PostgreSQL channel name {channel!r} exceeds 63 bytes."
+            msg,
+        )
+    if len(channel.encode("utf-8")) > 63:
+        msg = f"PostgreSQL channel name {channel!r} exceeds 63 bytes."
+        raise ValueError(
+            msg,
         )
 
 
@@ -70,7 +78,8 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
     ) -> None:
         super().__init__(listeners)
         if (dsn is None) == (pool is None):
-            raise ValueError("Provide exactly one of `dsn` or `pool`.")
+            msg = "Provide exactly one of `dsn` or `pool`."
+            raise ValueError(msg)
 
         self._dsn = dsn
         self._pool = pool
@@ -82,26 +91,32 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
             for event_id in listener.event_ids:
                 self._by_event[event_id].append(listener)
 
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
     def _channel(self, event_id: str) -> str:
         return f"{self._channel_prefix}{event_id}"
 
-    async def __aenter__(self) -> "PostgresEventEmitter":
+    async def __aenter__(self) -> Self:
         for event_id in self._by_event:
             try:
                 _validate_channel(self._channel(event_id))
             except ValueError as exc:
-                raise ValueError(
+                msg = (
                     f"event_id {event_id!r} produces an invalid PostgreSQL "
                     f"channel name. {exc}"
+                )
+                raise ValueError(
+                    msg,
                 ) from exc
 
         if self._owns_pool:
+            # __init__ guarantees exactly one of dsn/pool, so owning the pool
+            # means dsn was provided.
+            assert self._dsn is not None
             self._pool = AsyncConnectionPool(
                 self._dsn,
                 kwargs={"autocommit": True},
@@ -121,16 +136,15 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         if self._owns_pool and self._pool is not None:
             await self._pool.close()
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
@@ -156,9 +170,9 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
                 # LISTEN cannot be parameterized; psycopg.sql.Identifier quotes
                 # the channel name safely, and _validate_channel has already
                 # rejected anything outside [A-Za-z_][A-Za-z0-9_$]*.
-                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query  # noqa: ERA001
                 await conn.execute(
-                    SQL("LISTEN {}").format(Identifier(self._channel(event_id)))
+                    SQL("LISTEN {}").format(Identifier(self._channel(event_id))),
                 )
 
             async for notify in conn.notifies():
@@ -169,7 +183,8 @@ class PostgresEventEmitter(BaseEventEmitterBackend):
                     kwargs = payload.get("kwargs", {})
                 except Exception:
                     logger.exception(
-                        "Dropping unparseable NOTIFY on channel %s", notify.channel
+                        "Dropping unparseable NOTIFY on channel %s",
+                        notify.channel,
                     )
                     continue
 

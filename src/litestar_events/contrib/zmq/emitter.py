@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import zmq
 import zmq.asyncio
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +59,7 @@ class ZeroMQEventEmitter(BaseEventEmitterBackend):
         super().__init__(listeners)
         self._pub_address = pub_address
         self._connect_addresses = (
-            list(connect_addresses)
-            if connect_addresses is not None
-            else [pub_address]
+            list(connect_addresses) if connect_addresses is not None else [pub_address]
         )
         self._subscribe_warmup = subscribe_warmup
 
@@ -69,13 +71,13 @@ class ZeroMQEventEmitter(BaseEventEmitterBackend):
         self._ctx: zmq.asyncio.Context | None = None
         self._pub: zmq.asyncio.Socket | None = None
         self._sub: zmq.asyncio.Socket | None = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
-    async def __aenter__(self) -> "ZeroMQEventEmitter":
+    async def __aenter__(self) -> Self:
         self._ctx = zmq.asyncio.Context()
         self._pub = self._ctx.socket(zmq.PUB)
         self._pub.bind(self._pub_address)
@@ -100,16 +102,15 @@ class ZeroMQEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         if self._ctx is not None:
             self._ctx.destroy(linger=0)
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:

@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import re
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from confluent_kafka import Consumer, KafkaException, Producer
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +24,12 @@ _VALID_KAFKA_TOPIC = re.compile(r"^[A-Za-z0-9._-]{1,249}$")
 
 def _validate_topic(topic: str) -> None:
     if not _VALID_KAFKA_TOPIC.match(topic):
-        raise ValueError(
+        msg = (
             f"Invalid Kafka topic {topic!r}. Topics must match "
             "[A-Za-z0-9._-] and be 1..249 chars."
+        )
+        raise ValueError(
+            msg,
         )
 
 
@@ -80,9 +87,9 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
         self._producer_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._consumer_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._stopping = False
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._producer_poll_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
@@ -90,25 +97,28 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
     def _topic(self, event_id: str) -> str:
         return f"{self._topic_prefix}{event_id}"
 
-    async def __aenter__(self) -> "ConfluentEventEmitter":
+    async def __aenter__(self) -> Self:
         for event_id in self._by_event:
             try:
                 _validate_topic(self._topic(event_id))
             except ValueError as exc:
+                msg = f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
                 raise ValueError(
-                    f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
+                    msg,
                 ) from exc
 
         self._producer_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="confluent-producer"
+            max_workers=1,
+            thread_name_prefix="confluent-producer",
         )
         self._producer = Producer(
-            {"bootstrap.servers": self._bootstrap_servers, **self._producer_config}
+            {"bootstrap.servers": self._bootstrap_servers, **self._producer_config},
         )
 
         if self._by_event:
             self._consumer_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="confluent-consumer"
+                max_workers=1,
+                thread_name_prefix="confluent-consumer",
             )
             self._consumer = Consumer(
                 {
@@ -117,7 +127,7 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
                     "auto.offset.reset": "latest",
                     "enable.auto.commit": False,
                     **self._consumer_config,
-                }
+                },
             )
             await self._run_consumer(
                 self._consumer.subscribe,
@@ -135,17 +145,13 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
 
         if self._publisher_task is not None:
             self._publisher_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
-            except asyncio.CancelledError:
-                pass
 
         if self._producer_poll_task is not None:
             self._producer_poll_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._producer_poll_task
-            except asyncio.CancelledError:
-                pass
 
         if self._consumer_task is not None:
             try:
@@ -163,19 +169,20 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
         if self._consumer_pool is not None:
             self._consumer_pool.shutdown(wait=True)
 
-    async def _run_producer(self, fn, *args):
+    async def _run_producer(self, fn: Callable[..., Any], *args: Any) -> Any:
         assert self._producer_pool is not None
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._producer_pool, fn, *args)
 
-    async def _run_consumer(self, fn, *args):
+    async def _run_consumer(self, fn: Callable[..., Any], *args: Any) -> Any:
         assert self._consumer_pool is not None
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._consumer_pool, fn, *args)
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _producer_poll_loop(self) -> None:
@@ -246,9 +253,11 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
                 return_exceptions=True,
             )
 
+            consumer = self._consumer
+            assert consumer is not None
             try:
                 await self._run_consumer(
-                    lambda m: self._consumer.commit(message=m, asynchronous=False),
+                    lambda m: consumer.commit(message=m, asynchronous=False),
                     msg,
                 )
             except Exception:

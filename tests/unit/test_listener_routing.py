@@ -21,9 +21,9 @@ def _emitter_for(*listeners):
     return RabbitEventEmitter(listeners)
 
 
-async def test_single_event_single_listener():
+async def test_single_event_single_listener() -> None:
     @listener("user_registered")
-    async def lstn(**_):
+    async def lstn(**_) -> None:
         pass
 
     e = _emitter_for(lstn)
@@ -31,22 +31,22 @@ async def test_single_event_single_listener():
     assert e._by_event["user_registered"] == [lstn]
 
 
-async def test_multiple_listeners_same_event():
+async def test_multiple_listeners_same_event() -> None:
     @listener("user_registered")
-    async def a(**_):
+    async def a(**_) -> None:
         pass
 
     @listener("user_registered")
-    async def b(**_):
+    async def b(**_) -> None:
         pass
 
     e = _emitter_for(a, b)
     assert e._by_event["user_registered"] == [a, b]
 
 
-async def test_listener_with_multiple_event_ids():
+async def test_listener_with_multiple_event_ids() -> None:
     @listener("user_registered", "password_changed")
-    async def both(**_):
+    async def both(**_) -> None:
         pass
 
     e = _emitter_for(both)
@@ -55,6 +55,6 @@ async def test_listener_with_multiple_event_ids():
     assert e._by_event["password_changed"] == [both]
 
 
-async def test_empty_listeners():
+async def test_empty_listeners() -> None:
     e = _emitter_for()
     assert dict(e._by_event) == {}

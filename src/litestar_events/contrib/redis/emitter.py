@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from litestar.events import BaseEventEmitterBackend, EventListener
 from redis.asyncio import Redis
-from redis.asyncio.client import PubSub
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from redis.asyncio.client import PubSub
 
 logger = logging.getLogger(__name__)
 
@@ -54,16 +59,16 @@ class RedisEventEmitter(BaseEventEmitterBackend):
 
         self._client: Redis | None = None
         self._pubsub: PubSub | None = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
     def _channel(self, event_id: str) -> str:
         return f"{self._channel_prefix}{event_id}"
 
-    async def __aenter__(self) -> "RedisEventEmitter":
+    async def __aenter__(self) -> Self:
         self._client = Redis.from_url(self._redis_url)
         self._pubsub = self._client.pubsub()
 
@@ -80,10 +85,8 @@ class RedisEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         if self._pubsub is not None:
             await self._pubsub.aclose()
         if self._client is not None:
@@ -91,7 +94,8 @@ class RedisEventEmitter(BaseEventEmitterBackend):
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:

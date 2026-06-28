@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from aiohttp import ClientResponseError
@@ -18,6 +18,10 @@ from gcloud.aio.pubsub import (
     subscribe,
 )
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +87,9 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         self._topic = ""
         self._subscription = ""
         self._owns_subscription = subscription_name is None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
@@ -101,13 +105,14 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         assert self._subscriber is not None
         try:
             await self._subscriber.create_subscription(
-                self._subscription, self._topic
+                self._subscription,
+                self._topic,
             )
         except ClientResponseError as exc:
             if exc.status != 409:
                 raise
 
-    async def __aenter__(self) -> "PubSubEventEmitter":
+    async def __aenter__(self) -> Self:
         if self._emulator_host:
             os.environ.setdefault("PUBSUB_EMULATOR_HOST", self._emulator_host)
 
@@ -117,9 +122,7 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
             await self._ensure_topic()
 
         sub_id = self._subscription_name or f"{self._topic_id}-{uuid4().hex}"
-        self._subscription = (
-            f"projects/{self._project_id}/subscriptions/{sub_id}"
-        )
+        self._subscription = f"projects/{self._project_id}/subscriptions/{sub_id}"
 
         self._publish_queue = asyncio.Queue()
         self._publisher_task = asyncio.create_task(self._publisher_loop())
@@ -135,10 +138,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         if (
             self._owns_subscription
@@ -160,7 +161,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
@@ -171,7 +173,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
                 await self._publisher.publish(
-                    self._topic, [PubsubMessage(body, event_id=event_id)]
+                    self._topic,
+                    [PubsubMessage(body, event_id=event_id)],
                 )
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
@@ -189,6 +192,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
 
     async def _handle_message(self, message: SubscriberMessage) -> None:
         event_id = (message.attributes or {}).get("event_id", "")
+        if message.data is None:
+            return
         try:
             payload = json.loads(message.data)
             args = payload.get("args", [])

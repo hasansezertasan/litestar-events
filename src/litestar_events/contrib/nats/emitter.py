@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import nats
 from litestar.events import BaseEventEmitterBackend, EventListener
-from nats.aio.client import Client as NATSClient
-from nats.aio.msg import Msg
-from nats.aio.subscription import Subscription
+from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Sequence
+
+    from nats.aio.client import Client as NATSClient
+    from nats.aio.msg import Msg
+    from nats.aio.subscription import Subscription
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +26,17 @@ _VALID_SUBJECT_TOKEN = re.compile(r"^[^\s*>.]+$")
 
 def _validate_subject(subject: str) -> None:
     if not subject:
-        raise ValueError("NATS subject must not be empty.")
+        msg = "NATS subject must not be empty."
+        raise ValueError(msg)
     tokens = subject.split(".")
     for token in tokens:
         if not _VALID_SUBJECT_TOKEN.match(token):
-            raise ValueError(
+            msg = (
                 f"Invalid NATS subject {subject!r}: tokens must be non-empty "
                 "and must not contain whitespace, '*', or '>'."
+            )
+            raise ValueError(
+                msg,
             )
 
 
@@ -81,25 +90,28 @@ class NATSEventEmitter(BaseEventEmitterBackend):
 
         self._client: NATSClient | None = None
         self._subscriptions: list[Subscription] = []
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
 
     def _subject(self, event_id: str) -> str:
         return f"{self._subject_prefix}{event_id}"
 
-    async def __aenter__(self) -> "NATSEventEmitter":
+    async def __aenter__(self) -> Self:
         for event_id in self._by_event:
             try:
                 _validate_subject(self._subject(event_id))
             except ValueError as exc:
+                msg = f"event_id {event_id!r} produces an invalid NATS subject. {exc}"
                 raise ValueError(
-                    f"event_id {event_id!r} produces an invalid NATS "
-                    f"subject. {exc}"
+                    msg,
                 ) from exc
 
-        self._client = await nats.connect(servers=self._servers)
+        servers = (
+            self._servers if isinstance(self._servers, str) else list(self._servers)
+        )
+        self._client = await nats.connect(servers=servers)
 
         for event_id in self._by_event:
             subject = self._subject(event_id)
@@ -116,10 +128,8 @@ class NATSEventEmitter(BaseEventEmitterBackend):
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
         if self._publisher_task is not None:
             self._publisher_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
-            except asyncio.CancelledError:
-                pass
 
         for sub in self._subscriptions:
             try:
@@ -133,7 +143,8 @@ class NATSEventEmitter(BaseEventEmitterBackend):
 
     def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
         if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
+            msg = "Emitter used outside its async context"
+            raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
 
     async def _publisher_loop(self) -> None:
@@ -147,7 +158,7 @@ class NATSEventEmitter(BaseEventEmitterBackend):
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
-    def _make_callback(self, event_id: str):
+    def _make_callback(self, event_id: str) -> Callable[[Msg], Awaitable[None]]:
         listeners = self._by_event[event_id]
 
         async def _callback(msg: Msg) -> None:
@@ -157,7 +168,8 @@ class NATSEventEmitter(BaseEventEmitterBackend):
                 kwargs = payload.get("kwargs", {})
             except Exception:
                 logger.exception(
-                    "Dropping unparseable message on subject %s", msg.subject
+                    "Dropping unparseable message on subject %s",
+                    msg.subject,
                 )
                 return
 

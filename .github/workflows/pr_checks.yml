@@ -1,0 +1,39 @@
+---
+name: Check Prek
+on:
+  workflow_dispatch:  # Allows manual triggering of the workflow
+  pull_request:
+    branches: ["main"]  # Triggers on pull requests targeting the main branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}  # Grouping by workflow name and reference
+  cancel-in-progress: true  # Cancel any in-progress runs for the same group
+jobs:
+  prek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version-file: ".python-version"
+      - name: Setup uv
+        id: setup-uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: true
+      - name: Restore cache
+        if: steps.setup-uv.outputs.cache-hit == 'true'
+        run: echo "Cache was restored"
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Prek checks
+        uses: j178/prek-action@bdca6f102f98e2b4c7029491a53dfd366469e33d  # v2.0.4
+      - name: Commit formatting and linting fixes
+        if: failure()
+        uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9  # v7.1.0
+        with:
+          commit_message: "style: apply formatting and linting fixes"
