@@ -34,7 +34,7 @@ test = [
 dev = [
     { include-group = "optionals" },
     { include-group = "test" },
-    "prek==0.4.5",
+    "prek==0.4.6",
 ]
 
 
