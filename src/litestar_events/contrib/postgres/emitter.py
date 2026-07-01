@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -120,15 +120,15 @@ class PostgresEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
         if self._owns_pool:
             # __init__ guarantees exactly one of dsn/pool, so owning the pool
             # means dsn was provided.
-            assert self._dsn is not None
+            dsn = require(self._dsn, "dsn")
             self._pool = AsyncConnectionPool(
-                self._dsn,
+                dsn,
                 kwargs={"autocommit": True},
                 open=False,
             )
             await self._pool.open()
 
-        assert self._pool is not None
+        require(self._pool, "connection pool")
         if self._by_event:
             self._consumer_task = asyncio.create_task(self._consumer_loop())
 
@@ -146,13 +146,13 @@ class PostgresEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             await self._pool.close()
 
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._pool is not None
+        queue = require(self._publish_queue, "publish queue")
+        pool = require(self._pool, "connection pool")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs})
-                async with self._pool.connection() as conn:
+                async with pool.connection() as conn:
                     await conn.execute(
                         "SELECT pg_notify(%s, %s)",
                         (self._channel(event_id), body),
@@ -163,9 +163,9 @@ class PostgresEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     async def _consumer_loop(self) -> None:
         from psycopg.sql import SQL, Identifier
 
-        assert self._pool is not None
+        pool = require(self._pool, "connection pool")
         prefix_len = len(self._channel_prefix)
-        async with self._pool.connection() as conn:
+        async with pool.connection() as conn:
             for event_id in self._by_event:
                 # LISTEN cannot be parameterized; psycopg.sql.Identifier quotes
                 # the channel name safely, and _validate_channel has already

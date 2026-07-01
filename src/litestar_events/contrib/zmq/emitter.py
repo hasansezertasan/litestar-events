@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -113,21 +113,21 @@ class ZeroMQEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             self._ctx.destroy(linger=0)
 
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._pub is not None
+        queue = require(self._publish_queue, "publish queue")
+        pub = require(self._pub, "ZMQ publisher socket")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
-                await self._pub.send_multipart([event_id.encode(), body])
+                await pub.send_multipart([event_id.encode(), body])
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._sub is not None
+        sub = require(self._sub, "ZMQ subscriber socket")
         while True:
             try:
-                frames = await self._sub.recv_multipart()
+                frames = await sub.recv_multipart()
             except asyncio.CancelledError:
                 raise
             except Exception:

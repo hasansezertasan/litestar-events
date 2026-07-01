@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -97,20 +97,20 @@ class RedisEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             await self._client.aclose()
 
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._client is not None
+        queue = require(self._publish_queue, "publish queue")
+        client = require(self._client, "Redis client")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs})
-                await self._client.publish(self._channel(event_id), body)
+                await client.publish(self._channel(event_id), body)
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._pubsub is not None
+        pubsub = require(self._pubsub, "Redis pubsub")
         prefix_len = len(self._channel_prefix)
-        async for message in self._pubsub.listen():
+        async for message in pubsub.listen():
             if message.get("type") != "message":
                 continue
             try:

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -137,20 +137,20 @@ class KafkaEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             await self._producer.stop()
 
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._producer is not None
+        queue = require(self._publish_queue, "publish queue")
+        producer = require(self._producer, "Kafka producer")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
-                await self._producer.send_and_wait(self._topic(event_id), body)
+                await producer.send_and_wait(self._topic(event_id), body)
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._consumer is not None
+        consumer = require(self._consumer, "Kafka consumer")
         prefix_len = len(self._topic_prefix)
-        async for msg in self._consumer:
+        async for msg in consumer:
             topic = msg.topic
             event_id = topic[prefix_len:]
             value = msg.value
@@ -185,7 +185,7 @@ class KafkaEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             )
 
             try:
-                await self._consumer.commit()
+                await consumer.commit()
             except Exception:
                 logger.exception(
                     "Failed to commit offset for event %s; message may redeliver",

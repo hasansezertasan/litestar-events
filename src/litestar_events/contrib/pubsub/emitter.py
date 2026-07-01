@@ -11,7 +11,7 @@ from uuid import uuid4
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -96,9 +96,9 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     async def _ensure_topic(self) -> None:
         from aiohttp import ClientResponseError
 
-        assert self._publisher is not None
+        publisher = require(self._publisher, "Pub/Sub publisher")
         try:
-            await self._publisher.create_topic(self._topic)
+            await publisher.create_topic(self._topic)
         except ClientResponseError as exc:
             if exc.status != 409:  # 409 ALREADY_EXISTS is expected
                 raise
@@ -106,9 +106,9 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     async def _ensure_subscription(self) -> None:
         from aiohttp import ClientResponseError
 
-        assert self._subscriber is not None
+        subscriber = require(self._subscriber, "Pub/Sub subscriber")
         try:
-            await self._subscriber.create_subscription(
+            await subscriber.create_subscription(
                 self._subscription,
                 self._topic,
             )
@@ -167,13 +167,13 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     async def _publisher_loop(self) -> None:
         from gcloud.aio.pubsub import PubsubMessage
 
-        assert self._publish_queue is not None
-        assert self._publisher is not None
+        queue = require(self._publish_queue, "publish queue")
+        publisher = require(self._publisher, "Pub/Sub publisher")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
-                await self._publisher.publish(
+                await publisher.publish(
                     self._topic,
                     [PubsubMessage(body, event_id=event_id)],
                 )
@@ -183,11 +183,11 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     async def _run_subscribe(self) -> None:
         from gcloud.aio.pubsub import subscribe
 
-        assert self._subscriber is not None
+        subscriber = require(self._subscriber, "Pub/Sub subscriber")
         await subscribe(
             self._subscription,
             self._handle_message,
-            self._subscriber,
+            subscriber,
             num_producers=1,
             max_messages_per_producer=10,
             ack_deadline=self._ack_deadline,

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -152,13 +152,13 @@ class MQTTEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             await self._client_cm.__aexit__(exc_type, exc, tb)
 
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._client is not None
+        queue = require(self._publish_queue, "publish queue")
+        client = require(self._client, "MQTT client")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs})
-                await self._client.publish(
+                await client.publish(
                     self._topic(event_id),
                     payload=body,
                     qos=self._qos,
@@ -167,9 +167,9 @@ class MQTTEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._client is not None
+        client = require(self._client, "MQTT client")
         prefix_len = len(self._topic_prefix)
-        async for message in self._client.messages:
+        async for message in client.messages:
             topic = str(message.topic)
             event_id = topic[prefix_len:]
             try:

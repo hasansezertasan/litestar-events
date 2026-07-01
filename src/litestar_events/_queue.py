@@ -2,10 +2,31 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     import asyncio
+
+_T = TypeVar("_T")
+
+
+def require(value: _T | None, name: str) -> _T:
+    """Return ``value`` if set, else raise -- an ``assert`` that survives ``-O``.
+
+    Background publisher/consumer loops narrow attributes established in
+    ``__aenter__`` (queues, clients, pools, producers). ``assert x is not None``
+    narrows for the type checkers but is stripped under ``python -O``, which
+    would defer a stray ``None`` to an opaque ``AttributeError`` deep inside a
+    detached task. This helper raises a clear ``RuntimeError`` unconditionally
+    and returns the non-``None`` value (so the caller binds a narrowed local).
+
+    Raises:
+        RuntimeError: if ``value`` is ``None``.
+    """
+    if value is None:
+        msg = f"{name} is unavailable; emitter used outside its async context"
+        raise RuntimeError(msg)
+    return value
 
 
 class QueuedEmitterMixin:

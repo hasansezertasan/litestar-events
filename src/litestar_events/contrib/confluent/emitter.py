@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -175,47 +175,47 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             self._consumer_pool.shutdown(wait=True)
 
     async def _run_producer(self, fn: Callable[..., Any], *args: Any) -> Any:
-        assert self._producer_pool is not None
+        pool = require(self._producer_pool, "producer thread pool")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._producer_pool, fn, *args)
+        return await loop.run_in_executor(pool, fn, *args)
 
     async def _run_consumer(self, fn: Callable[..., Any], *args: Any) -> Any:
-        assert self._consumer_pool is not None
+        pool = require(self._consumer_pool, "consumer thread pool")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._consumer_pool, fn, *args)
+        return await loop.run_in_executor(pool, fn, *args)
 
     async def _producer_poll_loop(self) -> None:
-        assert self._producer is not None
+        producer = require(self._producer, "Kafka producer")
         while not self._stopping:
             await asyncio.sleep(0.1)
             try:
-                await self._run_producer(self._producer.poll, 0)
+                await self._run_producer(producer.poll, 0)
             except Exception:
                 logger.exception("Producer poll failed")
 
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._producer is not None
+        queue = require(self._publish_queue, "publish queue")
+        producer = require(self._producer, "Kafka producer")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
                 try:
-                    self._producer.produce(self._topic(event_id), value=body)
+                    producer.produce(self._topic(event_id), value=body)
                 except BufferError:
-                    await self._run_producer(self._producer.poll, 1.0)
-                    self._producer.produce(self._topic(event_id), value=body)
+                    await self._run_producer(producer.poll, 1.0)
+                    producer.produce(self._topic(event_id), value=body)
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
         from confluent_kafka import KafkaError, KafkaException
 
-        assert self._consumer is not None
+        consumer = require(self._consumer, "Kafka consumer")
         prefix_len = len(self._topic_prefix)
         while not self._stopping:
             try:
-                msg = await self._run_consumer(self._consumer.poll, 1.0)
+                msg = await self._run_consumer(consumer.poll, 1.0)
             except KafkaException:
                 logger.exception("Consumer poll raised")
                 continue
@@ -262,8 +262,6 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 return_exceptions=True,
             )
 
-            consumer = self._consumer
-            assert consumer is not None
             try:
                 await self._run_consumer(
                     lambda m: consumer.commit(message=m, asynchronous=False),

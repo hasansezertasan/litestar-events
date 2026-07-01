@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin
+from litestar_events._queue import QueuedEmitterMixin, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -119,13 +119,13 @@ class RabbitEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     async def _publisher_loop(self) -> None:
         import aio_pika
 
-        assert self._publish_queue is not None
-        assert self._exchange is not None
+        queue = require(self._publish_queue, "publish queue")
+        exchange = require(self._exchange, "RabbitMQ exchange")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
-                await self._exchange.publish(
+                await exchange.publish(
                     aio_pika.Message(
                         body=body,
                         delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
