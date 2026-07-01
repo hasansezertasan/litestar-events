@@ -2,16 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import re
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from confluent_kafka import Consumer, KafkaException, Producer
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+from litestar_events._queue import QueuedEmitterMixin, require
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from confluent_kafka import Consumer, Producer
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +27,16 @@ _VALID_KAFKA_TOPIC = re.compile(r"^[A-Za-z0-9._-]{1,249}$")
 
 def _validate_topic(topic: str) -> None:
     if not _VALID_KAFKA_TOPIC.match(topic):
-        raise ValueError(
+        msg = (
             f"Invalid Kafka topic {topic!r}. Topics must match "
             "[A-Za-z0-9._-] and be 1..249 chars."
         )
+        raise ValueError(
+            msg,
+        )
 
 
-class ConfluentEventEmitter(BaseEventEmitterBackend):
+class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by ``confluent-kafka`` (librdkafka).
 
     Delivery semantics:
@@ -80,9 +90,9 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
         self._producer_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._consumer_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._stopping = False
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._producer_poll_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
@@ -90,25 +100,30 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
     def _topic(self, event_id: str) -> str:
         return f"{self._topic_prefix}{event_id}"
 
-    async def __aenter__(self) -> "ConfluentEventEmitter":
+    async def __aenter__(self) -> Self:
+        from confluent_kafka import Consumer, Producer
+
         for event_id in self._by_event:
             try:
                 _validate_topic(self._topic(event_id))
             except ValueError as exc:
+                msg = f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
                 raise ValueError(
-                    f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
+                    msg,
                 ) from exc
 
         self._producer_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="confluent-producer"
+            max_workers=1,
+            thread_name_prefix="confluent-producer",
         )
         self._producer = Producer(
-            {"bootstrap.servers": self._bootstrap_servers, **self._producer_config}
+            {"bootstrap.servers": self._bootstrap_servers, **self._producer_config},
         )
 
         if self._by_event:
             self._consumer_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="confluent-consumer"
+                max_workers=1,
+                thread_name_prefix="confluent-consumer",
             )
             self._consumer = Consumer(
                 {
@@ -117,7 +132,7 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
                     "auto.offset.reset": "latest",
                     "enable.auto.commit": False,
                     **self._consumer_config,
-                }
+                },
             )
             await self._run_consumer(
                 self._consumer.subscribe,
@@ -135,17 +150,13 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
 
         if self._publisher_task is not None:
             self._publisher_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
-            except asyncio.CancelledError:
-                pass
 
         if self._producer_poll_task is not None:
             self._producer_poll_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._producer_poll_task
-            except asyncio.CancelledError:
-                pass
 
         if self._consumer_task is not None:
             try:
@@ -163,58 +174,63 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
         if self._consumer_pool is not None:
             self._consumer_pool.shutdown(wait=True)
 
-    async def _run_producer(self, fn, *args):
-        assert self._producer_pool is not None
+    async def _run_producer(self, fn: Callable[..., Any], *args: Any) -> Any:
+        pool = require(self._producer_pool, "producer thread pool")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._producer_pool, fn, *args)
+        return await loop.run_in_executor(pool, fn, *args)
 
-    async def _run_consumer(self, fn, *args):
-        assert self._consumer_pool is not None
+    async def _run_consumer(self, fn: Callable[..., Any], *args: Any) -> Any:
+        pool = require(self._consumer_pool, "consumer thread pool")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._consumer_pool, fn, *args)
-
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
-        self._publish_queue.put_nowait((event_id, args, kwargs))
+        return await loop.run_in_executor(pool, fn, *args)
 
     async def _producer_poll_loop(self) -> None:
-        assert self._producer is not None
+        producer = require(self._producer, "Kafka producer")
         while not self._stopping:
             await asyncio.sleep(0.1)
             try:
-                await self._run_producer(self._producer.poll, 0)
+                await self._run_producer(producer.poll, 0)
             except Exception:
                 logger.exception("Producer poll failed")
 
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._producer is not None
+        queue = require(self._publish_queue, "publish queue")
+        producer = require(self._producer, "Kafka producer")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
                 try:
-                    self._producer.produce(self._topic(event_id), value=body)
+                    producer.produce(self._topic(event_id), value=body)
                 except BufferError:
-                    await self._run_producer(self._producer.poll, 1.0)
-                    self._producer.produce(self._topic(event_id), value=body)
+                    await self._run_producer(producer.poll, 1.0)
+                    producer.produce(self._topic(event_id), value=body)
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._consumer is not None
+        from confluent_kafka import KafkaError, KafkaException
+
+        consumer = require(self._consumer, "Kafka consumer")
         prefix_len = len(self._topic_prefix)
         while not self._stopping:
             try:
-                msg = await self._run_consumer(self._consumer.poll, 1.0)
+                msg = await self._run_consumer(consumer.poll, 1.0)
             except KafkaException:
                 logger.exception("Consumer poll raised")
                 continue
             if msg is None:
                 continue
             if msg.error():
-                logger.error("Consumer error: %s", msg.error())
+                err = msg.error()
+                if err.code() == KafkaError._PARTITION_EOF:
+                    continue  # benign end-of-partition marker
+                if err.fatal():
+                    # Unrecoverable: stop consuming rather than spin the loop
+                    # re-logging the same error every poll.
+                    logger.critical("Fatal Kafka consumer error; stopping: %s", err)
+                    break
+                logger.error("Consumer error: %s", err)
                 continue
 
             topic = msg.topic() or ""
@@ -248,7 +264,7 @@ class ConfluentEventEmitter(BaseEventEmitterBackend):
 
             try:
                 await self._run_consumer(
-                    lambda m: self._consumer.commit(message=m, asynchronous=False),
+                    lambda m: consumer.commit(message=m, asynchronous=False),
                     msg,
                 )
             except Exception:

@@ -1,20 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from litestar.events import BaseEventEmitterBackend, EventListener
-from redis.asyncio import Redis
-from redis.asyncio.client import PubSub
+from typing_extensions import Self
+
+from litestar_events._queue import QueuedEmitterMixin, require
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from redis.asyncio import Redis
+    from redis.asyncio.client import PubSub
 
 logger = logging.getLogger(__name__)
 
 
-class RedisEventEmitter(BaseEventEmitterBackend):
+class RedisEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by Redis Pub/Sub.
 
     Delivery semantics:
@@ -54,16 +61,18 @@ class RedisEventEmitter(BaseEventEmitterBackend):
 
         self._client: Redis | None = None
         self._pubsub: PubSub | None = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
     def _channel(self, event_id: str) -> str:
         return f"{self._channel_prefix}{event_id}"
 
-    async def __aenter__(self) -> "RedisEventEmitter":
+    async def __aenter__(self) -> Self:
+        from redis.asyncio import Redis
+
         self._client = Redis.from_url(self._redis_url)
         self._pubsub = self._client.pubsub()
 
@@ -80,35 +89,28 @@ class RedisEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         if self._pubsub is not None:
             await self._pubsub.aclose()
         if self._client is not None:
             await self._client.aclose()
 
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
-        self._publish_queue.put_nowait((event_id, args, kwargs))
-
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._client is not None
+        queue = require(self._publish_queue, "publish queue")
+        client = require(self._client, "Redis client")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs})
-                await self._client.publish(self._channel(event_id), body)
+                await client.publish(self._channel(event_id), body)
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._pubsub is not None
+        pubsub = require(self._pubsub, "Redis pubsub")
         prefix_len = len(self._channel_prefix)
-        async for message in self._pubsub.listen():
+        async for message in pubsub.listen():
             if message.get("type") != "message":
                 continue
             try:

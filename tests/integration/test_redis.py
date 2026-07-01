@@ -9,8 +9,8 @@ from litestar_events.contrib.redis import RedisEventEmitter
 from ._helpers import make_capture_handler, make_failing_handler
 
 
-@pytest.mark.integration
-async def test_emit_delivers_to_listener(redis_url):
+@pytest.mark.integration()
+async def test_emit_delivers_to_listener(redis_url) -> None:
     handler, received, captured = make_capture_handler("user_registered")
     async with RedisEventEmitter([handler], redis_url=redis_url) as emitter:
         await asyncio.sleep(0.2)
@@ -19,8 +19,8 @@ async def test_emit_delivers_to_listener(redis_url):
     assert captured == {"email": "ada@example.com"}
 
 
-@pytest.mark.integration
-async def test_failing_listener_does_not_block_sibling(redis_url):
+@pytest.mark.integration()
+async def test_failing_listener_does_not_block_sibling(redis_url) -> None:
     good, received, captured = make_capture_handler("isolation_check")
     bad = make_failing_handler("isolation_check")
     async with RedisEventEmitter([bad, good], redis_url=redis_url) as emitter:

@@ -1,0 +1,77 @@
+---
+# Standard GitHub issue/PR labels
+- name: bug
+  description: Something isn't working
+  color: "d73a4a"
+- name: documentation
+  description: Improvements or additions to documentation
+  color: "0075ca"
+- name: duplicate
+  description: This issue or pull request already exists
+  color: "cfd3d7"
+- name: enhancement
+  description: New feature or request
+  color: "a2eeef"
+- name: good first issue
+  description: Good for newcomers
+  color: "7057ff"
+- name: help wanted
+  description: Extra attention is needed
+  color: "008672"
+- name: invalid
+  description: This doesn't seem right
+  color: "e4e669"
+- name: question
+  description: Further information is requested
+  color: "d876e3"
+- name: wontfix
+  description: This will not be worked on
+  color: "ffffff"
+# Automation / bot labels
+- name: automated
+  description: Opened by automation (e.g. Renovate)
+  color: "ededed"
+# Conventional scope labels (kept aligned with .github/labeler.yml)
+- name: dependencies
+  description: Updates to project dependencies
+  color: "0366d6"
+- name: github_actions
+  description: GitHub Actions workflows and labeler config
+  color: "1d76db"
+- name: tests
+  description: Test suite changes
+  color: "8a63d2"
+- name: examples
+  description: Example application changes
+  color: "b392f0"
+# Broker / transport labels (one per emitter backend)
+- name: confluent
+  description: confluent-kafka transport integration
+  color: "1f6feb"
+- name: kafka
+  description: aiokafka transport integration
+  color: "1f6feb"
+- name: mqtt
+  description: MQTT transport integration
+  color: "1f6feb"
+- name: nats
+  description: NATS transport integration
+  color: "1f6feb"
+- name: postgres
+  description: PostgreSQL LISTEN/NOTIFY transport integration
+  color: "1f6feb"
+- name: pubsub
+  description: GCP Pub/Sub transport integration
+  color: "1f6feb"
+- name: rabbit
+  description: RabbitMQ transport integration
+  color: "1f6feb"
+- name: redis
+  description: Redis transport integration
+  color: "1f6feb"
+- name: sqs
+  description: AWS SQS transport integration
+  color: "1f6feb"
+- name: zmq
+  description: ZeroMQ transport integration
+  color: "1f6feb"

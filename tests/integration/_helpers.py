@@ -8,6 +8,7 @@ The shape is identical across backends; only the emitter class differs.
 from __future__ import annotations
 
 import asyncio
+from typing import NoReturn
 
 from litestar.events import listener as litestar_listener
 
@@ -21,7 +22,7 @@ def make_capture_handler(event_id: str):
     captured: dict[str, object] = {}
 
     @litestar_listener(event_id)
-    async def handler(**kwargs):
+    async def handler(**kwargs) -> None:
         if not received.is_set():
             captured.update(kwargs)
             received.set()
@@ -33,7 +34,8 @@ def make_failing_handler(event_id: str):
     """Build a listener that always raises."""
 
     @litestar_listener(event_id)
-    async def handler(**_):
-        raise RuntimeError("listener boom")
+    async def handler(**_) -> NoReturn:
+        msg = "listener boom"
+        raise RuntimeError(msg)
 
     return handler

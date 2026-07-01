@@ -1,0 +1,97 @@
+---
+name: Tests
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  lint:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          version: "latest"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.14"
+      - run: uv sync --group dev
+      # --no-fix: pyproject sets fix=true for local dev, but CI must report
+      # (not silently auto-fix) violations or the gate passes on fixable issues.
+      - run: uv run ruff check --no-fix src/ tests/
+      - run: uv run ruff format --check src/ tests/
+      - run: uv run mypy src/
+      # basedpyright is the stricter checker that catches the Optional-narrowing
+      # gaps mypy's disabled `arg-type` misses; run it here too so the type gate
+      # does not live only in the prek workflow.
+      - run: uv run basedpyright
+  test:
+    # Unit + smoke tests across the support matrix. Integration tests are
+    # excluded here because they need Docker (testcontainers), which only the
+    # dedicated `integration` job below runs on ubuntu.
+    if: github.event.pull_request.draft == false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          version: "latest"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev --python ${{ matrix.python-version }}
+      - run: uv run --python ${{ matrix.python-version }} pytest -vv -m "not integration"
+  integration:
+    # One job per backend. Each test starts its own broker container via
+    # testcontainers, so no GitHub `services:` blocks are needed — Docker is
+    # preinstalled on ubuntu runners. zmq runs in-process (no container).
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        backend:
+          - confluent
+          - kafka
+          - mqtt
+          - nats
+          - postgres
+          - pubsub
+          - rabbit
+          - redis
+          - sqs
+          - zmq
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          version: "latest"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.14"
+      - run: uv sync --group dev
+      - run: >-
+          uv run pytest -vv -m integration tests/integration/test_${{ matrix.backend }}.py

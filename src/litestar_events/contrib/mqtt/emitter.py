@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import aiomqtt
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+from litestar_events._queue import QueuedEmitterMixin, require
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    import aiomqtt
 
 logger = logging.getLogger(__name__)
 
@@ -18,17 +25,22 @@ _INVALID_TOPIC = re.compile(r"[+#]")
 
 def _validate_topic(topic: str) -> None:
     if not topic:
-        raise ValueError("MQTT topic must not be empty.")
+        msg = "MQTT topic must not be empty."
+        raise ValueError(msg)
     if _INVALID_TOPIC.search(topic):
-        raise ValueError(
+        msg = (
             f"Invalid MQTT topic {topic!r}: must not contain '+' or '#' "
             "(those are MQTT wildcards)."
         )
+        raise ValueError(
+            msg,
+        )
     if "\x00" in topic:
-        raise ValueError(f"MQTT topic {topic!r} must not contain NUL.")
+        msg = f"MQTT topic {topic!r} must not contain NUL."
+        raise ValueError(msg)
 
 
-class MQTTEventEmitter(BaseEventEmitterBackend):
+class MQTTEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by MQTT.
 
     Delivery semantics:
@@ -84,22 +96,25 @@ class MQTTEventEmitter(BaseEventEmitterBackend):
 
         self._client: aiomqtt.Client | None = None
         self._client_cm: Any = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
     def _topic(self, event_id: str) -> str:
         return f"{self._topic_prefix}{event_id}"
 
-    async def __aenter__(self) -> "MQTTEventEmitter":
+    async def __aenter__(self) -> Self:
+        import aiomqtt
+
         for event_id in self._by_event:
             try:
                 _validate_topic(self._topic(event_id))
             except ValueError as exc:
+                msg = f"event_id {event_id!r} produces an invalid MQTT topic. {exc}"
                 raise ValueError(
-                    f"event_id {event_id!r} produces an invalid MQTT topic. {exc}"
+                    msg,
                 ) from exc
 
         self._client_cm = aiomqtt.Client(
@@ -110,6 +125,12 @@ class MQTTEventEmitter(BaseEventEmitterBackend):
             identifier=self._client_id,
         )
         self._client = await self._client_cm.__aenter__()
+        # Guard (not assert) the external CM contract: stripped asserts under
+        # `python -O` would defer a None here to an opaque AttributeError on the
+        # subscribe/publish call below.
+        if self._client is None:
+            msg = "aiomqtt client context manager returned no client"
+            raise RuntimeError(msg)
 
         for event_id in self._by_event:
             await self._client.subscribe(self._topic(event_id), qos=self._qos)
@@ -125,35 +146,30 @@ class MQTTEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         if self._client_cm is not None:
             await self._client_cm.__aexit__(exc_type, exc, tb)
 
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
-        self._publish_queue.put_nowait((event_id, args, kwargs))
-
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._client is not None
+        queue = require(self._publish_queue, "publish queue")
+        client = require(self._client, "MQTT client")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs})
-                await self._client.publish(
-                    self._topic(event_id), payload=body, qos=self._qos
+                await client.publish(
+                    self._topic(event_id),
+                    payload=body,
+                    qos=self._qos,
                 )
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._client is not None
+        client = require(self._client, "MQTT client")
         prefix_len = len(self._topic_prefix)
-        async for message in self._client.messages:
+        async for message in client.messages:
             topic = str(message.topic)
             event_id = topic[prefix_len:]
             try:

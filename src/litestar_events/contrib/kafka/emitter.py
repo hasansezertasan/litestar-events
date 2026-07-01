@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+from litestar_events._queue import QueuedEmitterMixin, require
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +26,16 @@ _VALID_KAFKA_TOPIC = re.compile(r"^[A-Za-z0-9._-]{1,249}$")
 
 def _validate_topic(topic: str) -> None:
     if not _VALID_KAFKA_TOPIC.match(topic):
-        raise ValueError(
+        msg = (
             f"Invalid Kafka topic {topic!r}. Topics must match "
             "[A-Za-z0-9._-] and be 1..249 chars."
         )
+        raise ValueError(
+            msg,
+        )
 
 
-class KafkaEventEmitter(BaseEventEmitterBackend):
+class KafkaEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by ``aiokafka`` (pure-Python Kafka).
 
     Delivery semantics:
@@ -74,22 +84,25 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
 
         self._producer: AIOKafkaProducer | None = None
         self._consumer: AIOKafkaConsumer | None = None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: (
+            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
+        ) = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
     def _topic(self, event_id: str) -> str:
         return f"{self._topic_prefix}{event_id}"
 
-    async def __aenter__(self) -> "KafkaEventEmitter":
+    async def __aenter__(self) -> Self:
+        from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+
         for event_id in self._by_event:
             try:
                 _validate_topic(self._topic(event_id))
             except ValueError as exc:
+                msg = f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
                 raise ValueError(
-                    f"event_id {event_id!r} produces an invalid Kafka topic. {exc}"
+                    msg,
                 ) from exc
 
         self._producer = AIOKafkaProducer(bootstrap_servers=self._bootstrap_servers)
@@ -115,40 +128,37 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         if self._consumer is not None:
             await self._consumer.stop()
         if self._producer is not None:
             await self._producer.stop()
 
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
-        self._publish_queue.put_nowait((event_id, args, kwargs))
-
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._producer is not None
+        queue = require(self._publish_queue, "publish queue")
+        producer = require(self._producer, "Kafka producer")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
-                await self._producer.send_and_wait(self._topic(event_id), body)
+                await producer.send_and_wait(self._topic(event_id), body)
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
-        assert self._consumer is not None
+        consumer = require(self._consumer, "Kafka consumer")
         prefix_len = len(self._topic_prefix)
-        async for msg in self._consumer:
+        async for msg in consumer:
             topic = msg.topic
             event_id = topic[prefix_len:]
+            value = msg.value
+            if value is None:  # tombstone / empty record
+                logger.debug("Skipping tombstone record on topic %s", topic)
+                continue
             try:
-                payload = json.loads(msg.value)
+                payload = json.loads(value)
                 args = payload.get("args", [])
                 kwargs = payload.get("kwargs", {})
             except Exception:
@@ -175,7 +185,7 @@ class KafkaEventEmitter(BaseEventEmitterBackend):
             )
 
             try:
-                await self._consumer.commit()
+                await consumer.commit()
             except Exception:
                 logger.exception(
                     "Failed to commit offset for event %s; message may redeliver",

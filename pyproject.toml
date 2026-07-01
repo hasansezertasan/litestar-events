@@ -29,11 +29,18 @@ optionals = [
 test = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
     "testcontainers[kafka,localstack,nats,postgres,rabbitmq,redis]>=4",
+]
+lint = [
+    "ruff>=0.15",
+    "mypy>=1.13",
+    "basedpyright>=1.39",
 ]
 dev = [
     { include-group = "optionals" },
     { include-group = "test" },
+    { include-group = "lint" },
     "prek==0.4.5",
 ]
 
@@ -45,7 +52,180 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Per-test safety net (belt-and-suspenders with the job-level timeout-minutes):
+# a wedged broker call fails the test instead of stalling the job. "thread" is
+# the only method that works on Windows (no SIGALRM) and is robust for async.
+timeout = 300
+timeout_method = "thread"
 markers = [
     "integration: requires a running broker (see tests/integration/conftest.py)",
     "smoke: cross-cutting checks (imports, packaging)",
 ]
+
+[tool.ruff]
+fix = true
+output-format = "full"
+preview = true
+show-fixes = true
+src = ["src", "tests"]
+target-version = "py310"
+unsafe-fixes = true
+# Demo scripts under examples/ intentionally use print(), pedagogical
+# commented-out config, and a flat (non-package) layout. They are excluded
+# from linting (the lint CI job already scopes to src/ tests/); force-exclude
+# makes prek honor this even when it passes explicit file paths.
+extend-exclude = ["examples"]
+force-exclude = true
+
+[tool.ruff.format]
+docstring-code-format = true
+line-ending = "lf"
+preview = true
+
+[tool.ruff.lint]
+ignore = [
+    "ARG",
+    "ANN401",
+    "S101",
+    "SLF001",
+    "PLR0912",
+    "PLR0913",
+    "PLR2004",
+    "E501",
+    "C901",
+    # preview
+    "CPY",
+    "PLC0415",
+    "PLR6301",
+    "RUF029",
+    "RUF067",
+    # pep8-naming
+    "N817",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    # Magic-method docstrings (e.g. ``__aenter__``/``__aexit__``) add little
+    # value; consistent with the D10x family already ignored above.
+    "D105",
+    "D107",
+    "DOC201",
+    "BLE001",
+    # ``try``/``except`` inside the consumer/publisher loops is intentional:
+    # each message is isolated so one bad listener can't kill the loop.
+    "PERF203",
+    # The publish-with-retry try clauses are cohesive; splitting them to
+    # satisfy the statement count hurts readability more than it helps.
+    "PLW0717",
+    # Conflicts with the ruff formatter (ruff warns about this); the formatter
+    # owns trailing-comma placement.
+    "COM812",
+]
+preview = true
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+# B023: the per-listener dispatch closures in each emitter capture the loop
+# variables (args/kwargs/event_id) but are awaited via ``asyncio.gather`` in
+# the same iteration, before the loop reassigns them — a verified false
+# positive for this immediate-consumption pattern.
+"./src/litestar_events/contrib/**/*.py" = ["B023"]
+"./tests/**/*.py" = [
+    "ANN",      # fixtures/handlers in tests need not be fully annotated
+    "PLC2701",
+    "PT011",    # broad ``pytest.raises`` is fine for validator rejection tests
+    "PT019",    # leading-underscore fixtures are intentional here
+    "S101",
+    "S106",     # hard-coded test credentials (e.g. localstack) are not secrets
+    "TC",
+    "RUF076",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = true
+mark-parentheses = true
+parametrize-names-type = "tuple"
+parametrize-values-type = "tuple"
+parametrize-values-row-type = "tuple"
+
+[tool.mypy]
+# from https://blog.wolt.com/engineering/2021/09/30/professional-grade-mypy-configuration/
+check_untyped_defs = true
+disable_error_code = [
+    "arg-type",
+    "assignment",
+    "attr-defined",
+    "no-any-return",
+    "no-untyped-call",
+    "no-untyped-def",
+    "prop-decorator",
+    "return-value",
+    "type-arg",
+]
+disallow_any_unimported = false
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+files = ["src", "tests"]
+mypy_path = ["src"]
+no_implicit_optional = true
+pretty = true
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_decorators = false
+
+[tool.basedpyright]
+# Paths resolve relative to this file (repo root), so no separate
+# pyrightconfig.json is needed.
+disableBytesTypePromotions = true
+include = ["src", "tests"]
+pythonVersion = "3.10"
+reportMissingTypeStubs = false
+reportPrivateImportUsage = true
+reportUnknownMemberType = false
+reportUnnecessaryTypeIgnoreComment = true
+reportUnusedFunction = false
+reportFunctionMemberAccess = false
+typeCheckingMode = "standard"
+venv = ".venv"
+venvPath = "."
+
+[tool.vulture]
+exclude = ["*/.venv/*.py"]
+ignore_names = ["cls", "start", "test_broker", "TracebackType"]
+min_confidence = 80
+paths = ["src", "tests"]
+sort_by_size = true
+
+[tool.pyrefly]
+disable-search-path-heuristics = true
+disable-project-excludes-heuristics = true
+project-excludes = [
+    "**/.venv/**/*",
+    "**/__pycache__",
+    "**/node_modules",
+    "**/venv/**/*",
+]
+project-includes = ["src", "tests"]
+python-interpreter-path = ".venv/bin/python3"
+python-version = "3.10"
+search-path = [".", "src"]
+use-ignore-files = false
+
+[[tool.pyrefly.sub_config]]
+matches = "tests/**"
+
+[tool.pyrefly.sub_config.errors]
+missing-attribute = false
+bad-argument-type = false
+no-matching-overload = false
