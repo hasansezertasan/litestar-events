@@ -1,27 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from aiohttp import ClientResponseError
-from gcloud.aio.pubsub import (
-    PublisherClient,
-    PubsubMessage,
-    SubscriberClient,
-    SubscriberMessage,
-    subscribe,
-)
 from litestar.events import BaseEventEmitterBackend, EventListener
+from typing_extensions import Self
+
+from litestar_events._queue import QueuedEmitterMixin, QueuePayload, require
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from gcloud.aio.pubsub import (
+        PublisherClient,
+        SubscriberClient,
+        SubscriberMessage,
+    )
 
 logger = logging.getLogger(__name__)
 
 
-class PubSubEventEmitter(BaseEventEmitterBackend):
+class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     """A Litestar event emitter backend backed by GCP Pub/Sub via gcloud-aio.
 
     Delivery semantics:
@@ -31,7 +35,8 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
       - Listener exceptions are caught per-listener; siblings still complete.
         The handler never re-raises, so a permanently-failing listener does not
         cause infinite redelivery (matching the other durable backends).
-      - Unparseable messages are acked and dropped with a logged error.
+      - Unparseable or empty (no-data) messages are acked and dropped with a
+        logged warning/error.
 
     Topology:
       - A single topic (``topic_id``) carries every event id. The originating
@@ -83,34 +88,37 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         self._topic = ""
         self._subscription = ""
         self._owns_subscription = subscription_name is None
-        self._publish_queue: asyncio.Queue[
-            tuple[str, tuple[Any, ...], dict[str, Any]]
-        ] | None = None
+        self._publish_queue: asyncio.Queue[QueuePayload] | None = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
     async def _ensure_topic(self) -> None:
-        assert self._publisher is not None
+        from aiohttp import ClientResponseError
+
+        publisher = require(self._publisher, "Pub/Sub publisher")
         try:
-            await self._publisher.create_topic(self._topic)
+            await publisher.create_topic(self._topic)
         except ClientResponseError as exc:
             if exc.status != 409:  # 409 ALREADY_EXISTS is expected
                 raise
 
     async def _ensure_subscription(self) -> None:
-        assert self._subscriber is not None
+        from aiohttp import ClientResponseError
+
+        subscriber = require(self._subscriber, "Pub/Sub subscriber")
         try:
-            await self._subscriber.create_subscription(
-                self._subscription, self._topic
+            await subscriber.create_subscription(
+                self._subscription,
+                self._topic,
             )
         except ClientResponseError as exc:
             if exc.status != 409:
                 raise
 
-    async def __aenter__(self) -> "PubSubEventEmitter":
-        api_root = (
-            f"http://{self._emulator_host}/v1" if self._emulator_host else None
-        )
+    async def __aenter__(self) -> Self:
+        from gcloud.aio.pubsub import PublisherClient, SubscriberClient
+
+        api_root = f"http://{self._emulator_host}/v1" if self._emulator_host else None
 
         self._publisher = PublisherClient(api_root=api_root)
         self._topic = f"projects/{self._project_id}/topics/{self._topic_id}"
@@ -118,9 +126,7 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
             await self._ensure_topic()
 
         sub_id = self._subscription_name or f"{self._topic_id}-{uuid4().hex}"
-        self._subscription = (
-            f"projects/{self._project_id}/subscriptions/{sub_id}"
-        )
+        self._subscription = f"projects/{self._project_id}/subscriptions/{sub_id}"
 
         self._publish_queue = asyncio.Queue()
         self._publisher_task = asyncio.create_task(self._publisher_loop())
@@ -136,10 +142,9 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         for task in (self._publisher_task, self._consumer_task):
             if task is not None:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
+        self._close_queue()
 
         if (
             self._owns_subscription
@@ -159,30 +164,30 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
         if self._publisher is not None:
             await self._publisher.close()
 
-    def emit(self, event_id: str, *args: Any, **kwargs: Any) -> None:
-        if self._publish_queue is None:
-            raise RuntimeError("Emitter used outside its async context")
-        self._publish_queue.put_nowait((event_id, args, kwargs))
-
     async def _publisher_loop(self) -> None:
-        assert self._publish_queue is not None
-        assert self._publisher is not None
+        from gcloud.aio.pubsub import PubsubMessage
+
+        queue = require(self._publish_queue, "publish queue")
+        publisher = require(self._publisher, "Pub/Sub publisher")
         while True:
-            event_id, args, kwargs = await self._publish_queue.get()
+            event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs}).encode()
-                await self._publisher.publish(
-                    self._topic, [PubsubMessage(body, event_id=event_id)]
+                await publisher.publish(
+                    self._topic,
+                    [PubsubMessage(body, event_id=event_id)],
                 )
             except Exception:
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _run_subscribe(self) -> None:
-        assert self._subscriber is not None
+        from gcloud.aio.pubsub import subscribe
+
+        subscriber = require(self._subscriber, "Pub/Sub subscriber")
         await subscribe(
             self._subscription,
             self._handle_message,
-            self._subscriber,
+            subscriber,
             num_producers=1,
             max_messages_per_producer=10,
             ack_deadline=self._ack_deadline,
@@ -190,6 +195,14 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
 
     async def _handle_message(self, message: SubscriberMessage) -> None:
         event_id = (message.attributes or {}).get("event_id", "")
+        # gcloud-aio's ``subscribe`` acks a message once its handler returns
+        # normally, so every early ``return`` below both drops *and* acks the
+        # message -- a no-data or unparseable message is not redelivered.
+        if message.data is None:
+            logger.warning(
+                "Dropping Pub/Sub message with no data (event_id=%s)", event_id
+            )
+            return
         try:
             payload = json.loads(message.data)
             args = payload.get("args", [])
@@ -200,6 +213,7 @@ class PubSubEventEmitter(BaseEventEmitterBackend):
 
         listeners = self._by_event.get(event_id, [])
         if not listeners:
+            logger.info("No listeners for event %s; acking and dropping", event_id)
             return
 
         async def _run_one(listener: EventListener) -> None:

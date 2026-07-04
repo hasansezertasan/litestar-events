@@ -25,9 +25,9 @@ BACKENDS = [
 ]
 
 
-@pytest.mark.smoke
-@pytest.mark.parametrize("module_path,class_name", BACKENDS)
-def test_backend_importable(module_path, class_name):
+@pytest.mark.smoke()
+@pytest.mark.parametrize(("module_path", "class_name"), BACKENDS)
+def test_backend_importable(module_path, class_name) -> None:
     mod = importlib.import_module(module_path)
     cls = getattr(mod, class_name)
     assert issubclass(cls, BaseEventEmitterBackend), (
@@ -38,9 +38,9 @@ def test_backend_importable(module_path, class_name):
     )
 
 
-@pytest.mark.smoke
-@pytest.mark.parametrize("module_path,class_name", BACKENDS)
-def test_backend_constructs_with_empty_listeners(module_path, class_name):
+@pytest.mark.smoke()
+@pytest.mark.parametrize(("module_path", "class_name"), BACKENDS)
+def test_backend_constructs_with_empty_listeners(module_path, class_name) -> None:
     """Sync construction should not touch the network."""
     mod = importlib.import_module(module_path)
     cls = getattr(mod, class_name)

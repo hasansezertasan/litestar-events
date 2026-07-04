@@ -51,7 +51,7 @@ def pubsub_emulator():
     from testcontainers.core.waiting_utils import wait_for_logs
 
     container = DockerContainer(
-        "messagebird/gcloud-pubsub-emulator:latest"
+        "messagebird/gcloud-pubsub-emulator:latest",
     ).with_exposed_ports(8681)
     with container as c:
         wait_for_logs(c, "Server started", timeout=60)
@@ -84,8 +84,8 @@ def mqtt_host_port():
         DockerContainer("eclipse-mosquitto:2")
         .with_exposed_ports(1883)
         .with_command(
-            "sh -c 'printf %s \"" + config.decode() + "\" > /m.conf && "
-            "mosquitto -c /m.conf'"
+            "sh -c 'printf %s \"" + config.decode() + '" > /m.conf && '
+            "mosquitto -c /m.conf'",
         )
     )
     with container as c:

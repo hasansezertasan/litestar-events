@@ -10,8 +10,8 @@ from litestar_events.contrib.kafka import KafkaEventEmitter
 from ._helpers import make_capture_handler, make_failing_handler
 
 
-@pytest.mark.integration
-async def test_emit_delivers_to_listener(kafka_bootstrap):
+@pytest.mark.integration()
+async def test_emit_delivers_to_listener(kafka_bootstrap) -> None:
     handler, received, captured = make_capture_handler("user_registered")
     async with KafkaEventEmitter(
         [handler],
@@ -25,8 +25,8 @@ async def test_emit_delivers_to_listener(kafka_bootstrap):
     assert captured == {"email": "ada@example.com"}
 
 
-@pytest.mark.integration
-async def test_failing_listener_does_not_block_sibling(kafka_bootstrap):
+@pytest.mark.integration()
+async def test_failing_listener_does_not_block_sibling(kafka_bootstrap) -> None:
     good, received, captured = make_capture_handler("isolation_check")
     bad = make_failing_handler("isolation_check")
     async with KafkaEventEmitter(
