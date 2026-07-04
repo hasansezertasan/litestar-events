@@ -5,13 +5,13 @@ import contextlib
 import json
 import logging
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin, require
+from litestar_events._queue import QueuedEmitterMixin, QueuePayload, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -35,7 +35,8 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
       - Listener exceptions are caught per-listener; siblings still complete.
         The handler never re-raises, so a permanently-failing listener does not
         cause infinite redelivery (matching the other durable backends).
-      - Unparseable messages are acked and dropped with a logged error.
+      - Unparseable or empty (no-data) messages are acked and dropped with a
+        logged warning/error.
 
     Topology:
       - A single topic (``topic_id``) carries every event id. The originating
@@ -87,9 +88,7 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
         self._topic = ""
         self._subscription = ""
         self._owns_subscription = subscription_name is None
-        self._publish_queue: (
-            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
-        ) = None
+        self._publish_queue: asyncio.Queue[QueuePayload] | None = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
@@ -210,6 +209,7 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
         listeners = self._by_event.get(event_id, [])
         if not listeners:
+            logger.debug("No listeners for event %s; acking and dropping", event_id)
             return
 
         async def _run_one(listener: EventListener) -> None:

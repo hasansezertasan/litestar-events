@@ -14,7 +14,9 @@ permissions:
   contents: read
 jobs:
   lint:
-    if: github.event.pull_request.draft == false
+    # Skip draft PRs, but always run on push/merge_group (where
+    # `github.event.pull_request` is null and `null == false` is false).
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,7 +43,7 @@ jobs:
     # Unit + smoke tests across the support matrix. Integration tests are
     # excluded here because they need Docker (testcontainers), which only the
     # dedicated `integration` job below runs on ubuntu.
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -65,7 +67,7 @@ jobs:
     # One job per backend. Each test starts its own broker container via
     # testcontainers, so no GitHub `services:` blocks are needed — Docker is
     # preinstalled on ubuntu runners. zmq runs in-process (no container).
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:

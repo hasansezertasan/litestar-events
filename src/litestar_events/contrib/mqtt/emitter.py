@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin, require
+from litestar_events._queue import QueuedEmitterMixin, QueuePayload, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -96,9 +96,7 @@ class MQTTEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
         self._client: aiomqtt.Client | None = None
         self._client_cm: Any = None
-        self._publish_queue: (
-            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
-        ) = None
+        self._publish_queue: asyncio.Queue[QueuePayload] | None = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 

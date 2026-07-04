@@ -11,6 +11,10 @@ jobs:
   prek:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # `contents: write` lets the auto-commit step below push formatting fixes
+    # back to the PR branch; the default token is read-only otherwise.
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0

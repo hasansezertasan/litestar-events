@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin, require
+from litestar_events._queue import QueuedEmitterMixin, QueuePayload, require
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -90,9 +90,7 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
         self._producer_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._consumer_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._stopping = False
-        self._publish_queue: (
-            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
-        ) = None
+        self._publish_queue: asyncio.Queue[QueuePayload] | None = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._producer_poll_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
@@ -245,6 +243,7 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
             listeners = self._by_event.get(event_id, [])
             if not listeners:
+                logger.debug("No listeners for event %s; dropping", event_id)
                 continue
 
             async def _run_one(listener: EventListener) -> None:

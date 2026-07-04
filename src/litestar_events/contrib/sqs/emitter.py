@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin, require
+from litestar_events._queue import QueuedEmitterMixin, QueuePayload, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -90,9 +90,7 @@ class SQSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
         self._stack: AsyncExitStack | None = None
         self._pub_client: Any = None
         self._sub_client: Any = None
-        self._publish_queue: (
-            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
-        ) = None
+        self._publish_queue: asyncio.Queue[QueuePayload] | None = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 
@@ -200,6 +198,7 @@ class SQSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
         listeners = self._by_event.get(event_id, [])
         if not listeners:
+            logger.debug("No listeners for event %s; deleting and dropping", event_id)
             await self._delete(receipt)
             return
 

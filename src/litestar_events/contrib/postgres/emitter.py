@@ -6,12 +6,12 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin, require
+from litestar_events._queue import QueuedEmitterMixin, QueuePayload, require
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -93,9 +93,7 @@ class PostgresEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             for event_id in listener.event_ids:
                 self._by_event[event_id].append(listener)
 
-        self._publish_queue: (
-            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
-        ) = None
+        self._publish_queue: asyncio.Queue[QueuePayload] | None = None
         self._publisher_task: asyncio.Task[None] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
 

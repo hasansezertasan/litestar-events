@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 if TYPE_CHECKING:
     import asyncio
 
 _T = TypeVar("_T")
+
+#: The payload buffered on a backend's publish queue: ``(event_id, args, kwargs)``.
+QueuePayload: TypeAlias = tuple[str, tuple[Any, ...], dict[str, Any]]
 
 
 def require(value: _T | None, name: str) -> _T:
@@ -46,9 +49,7 @@ class QueuedEmitterMixin:
 
     # Class default so the guard below holds even before any ``__init__`` /
     # ``__aenter__`` assignment; per-instance assignment shadows it normally.
-    _publish_queue: (
-        asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
-    ) = None
+    _publish_queue: asyncio.Queue[QueuePayload] | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         # The MRO ordering (mixin before the ABC) is not type-checkable, so

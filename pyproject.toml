@@ -101,6 +101,7 @@ ignore = [
     "RUF067",
     # pep8-naming
     "N817",
+    # pydocstyle
     "D100",
     "D101",
     "D102",
@@ -126,10 +127,11 @@ preview = true
 select = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
-# B023: the per-listener dispatch closures in each emitter capture the loop
-# variables (args/kwargs/event_id) but are awaited via ``asyncio.gather`` in
-# the same iteration, before the loop reassigns them — a verified false
-# positive for this immediate-consumption pattern.
+# B023: the per-listener dispatch closures in the loop-driven emitters capture
+# the loop variables (args/kwargs/event_id) but are awaited via
+# ``asyncio.gather`` in the same iteration, before the loop reassigns them — a
+# verified false positive for this immediate-consumption pattern. Applied
+# backend-wide for consistency (callback-driven backends never trigger B023).
 "./src/litestar_events/contrib/**/*.py" = ["B023"]
 "./tests/**/*.py" = [
     "ANN",      # fixtures/handlers in tests need not be fully annotated
@@ -139,7 +141,6 @@ select = ["ALL"]
     "S101",
     "S106",     # hard-coded test credentials (e.g. localstack) are not secrets
     "TC",
-    "RUF076",
 ]
 
 [tool.ruff.lint.pydocstyle]

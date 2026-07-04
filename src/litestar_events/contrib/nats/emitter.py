@@ -6,12 +6,12 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from litestar.events import BaseEventEmitterBackend, EventListener
 from typing_extensions import Self
 
-from litestar_events._queue import QueuedEmitterMixin, require
+from litestar_events._queue import QueuedEmitterMixin, QueuePayload, require
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -69,8 +69,8 @@ class NATSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
     Not suitable for:
       - durability across restarts (use the rabbit backend or NATS JetStream),
       - work-queue / single-consumer semantics (use the rabbit backend with
-        a shared ``queue_name``, or NATS queue groups via a future
-        ``queue_group`` argument).
+        a shared ``queue_name``; NATS queue groups are not currently exposed
+        by this backend).
     """
 
     def __init__(
@@ -91,9 +91,7 @@ class NATSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
         self._client: NATSClient | None = None
         self._subscriptions: list[Subscription] = []
-        self._publish_queue: (
-            asyncio.Queue[tuple[str, tuple[Any, ...], dict[str, Any]]] | None
-        ) = None
+        self._publish_queue: asyncio.Queue[QueuePayload] | None = None
         self._publisher_task: asyncio.Task[None] | None = None
 
     def _subject(self, event_id: str) -> str:
