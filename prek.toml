@@ -60,7 +60,7 @@ rev = "v2.16"
 hooks = [{ id = "vulture" }]
 [[repos]]
 repo = "https://github.com/DetachHead/basedpyright-prek-mirror"
-rev = "1.39.8"
+rev = "1.39.9"
 hooks = [{ id = "basedpyright", files = "^((src|tests)/.*\\.py)$" }]
 [[repos]]
 repo = "https://github.com/facebook/pyrefly-pre-commit"
