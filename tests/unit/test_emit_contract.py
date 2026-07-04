@@ -34,6 +34,36 @@ def test_publish_queue_defaults_to_none() -> None:
     assert _emitter()._publish_queue is None
 
 
+def test_emit_after_teardown_raises() -> None:
+    # _close_queue() (called from every backend's __aexit__) drops the queue,
+    # so a late emit raises rather than silently buffering onto an abandoned
+    # queue that no publisher task will ever drain.
+    import asyncio
+
+    emitter = _emitter()
+    emitter._publish_queue = asyncio.Queue()  # as __aenter__ would set it
+    emitter.emit("user_registered", 1)  # succeeds while the queue is live
+    emitter._close_queue()  # as __aexit__ does on shutdown
+    with pytest.raises(RuntimeError, match="outside its async context"):
+        emitter.emit("user_registered", 1)
+
+
+def test_correct_mro_order_accepted() -> None:
+    # The mixin-first order is accepted and the mixin's concrete emit — not the
+    # ABC's abstract one — is what the subclass resolves and can call.
+    from litestar.events import BaseEventEmitterBackend
+
+    from litestar_events._queue import QueuedEmitterMixin
+
+    class _Good(QueuedEmitterMixin, BaseEventEmitterBackend):
+        pass
+
+    # The mixin's concrete emit wins over the ABC's, so emit is no longer
+    # abstract (only the context-manager hooks remain for a real backend).
+    assert _Good.emit is QueuedEmitterMixin.emit
+    assert "emit" not in _Good.__abstractmethods__
+
+
 def test_wrong_mro_order_rejected() -> None:
     # The mixin must precede the ABC; the wrong order is caught at definition
     # time by __init_subclass__ rather than failing opaquely later.

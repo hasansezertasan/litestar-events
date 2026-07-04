@@ -150,6 +150,7 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             self._publisher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
+        self._close_queue()
 
         if self._producer_poll_task is not None:
             self._producer_poll_task.cancel()
@@ -243,7 +244,7 @@ class ConfluentEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
             listeners = self._by_event.get(event_id, [])
             if not listeners:
-                logger.debug("No listeners for event %s; dropping", event_id)
+                logger.info("No listeners for event %s; dropping", event_id)
                 continue
 
             async def _run_one(listener: EventListener) -> None:

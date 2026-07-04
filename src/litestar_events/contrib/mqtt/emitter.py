@@ -146,6 +146,7 @@ class MQTTEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        self._close_queue()
         if self._client_cm is not None:
             await self._client_cm.__aexit__(exc_type, exc, tb)
 

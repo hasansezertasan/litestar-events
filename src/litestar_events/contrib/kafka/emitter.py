@@ -128,6 +128,7 @@ class KafkaEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        self._close_queue()
 
         if self._consumer is not None:
             await self._consumer.stop()
@@ -165,7 +166,7 @@ class KafkaEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
             listeners = self._by_event.get(event_id, [])
             if not listeners:
-                logger.debug("No listeners for event %s; dropping", event_id)
+                logger.info("No listeners for event %s; dropping", event_id)
                 continue
 
             async def _run_one(listener: EventListener) -> None:

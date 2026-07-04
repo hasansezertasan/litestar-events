@@ -107,6 +107,7 @@ class ZeroMQEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        self._close_queue()
         if self._ctx is not None:
             self._ctx.destroy(linger=0)
 

@@ -142,17 +142,20 @@ class SQSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
+        self._close_queue()
         if self._stack is not None:
             await self._stack.aclose()
 
     async def _publisher_loop(self) -> None:
         queue = require(self._publish_queue, "publish queue")
+        client = require(self._pub_client, "SQS publish client")
+        queue_url = require(self._queue_url, "SQS queue URL")
         while True:
             event_id, args, kwargs = await queue.get()
             try:
                 body = json.dumps({"args": list(args), "kwargs": kwargs})
-                await self._pub_client.send_message(
-                    QueueUrl=self._queue_url,
+                await client.send_message(
+                    QueueUrl=queue_url,
                     MessageBody=body,
                     MessageAttributes={
                         "event_id": {"DataType": "String", "StringValue": event_id},
@@ -162,10 +165,12 @@ class SQSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 logger.exception("Failed to publish event %s", event_id)
 
     async def _consumer_loop(self) -> None:
+        client = require(self._sub_client, "SQS consume client")
+        queue_url = require(self._queue_url, "SQS queue URL")
         while True:
             try:
-                resp = await self._sub_client.receive_message(
-                    QueueUrl=self._queue_url,
+                resp = await client.receive_message(
+                    QueueUrl=queue_url,
                     MaxNumberOfMessages=self._max_messages,
                     WaitTimeSeconds=self._wait_time_seconds,
                     VisibilityTimeout=self._visibility_timeout,
@@ -198,7 +203,7 @@ class SQSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
         listeners = self._by_event.get(event_id, [])
         if not listeners:
-            logger.debug("No listeners for event %s; deleting and dropping", event_id)
+            logger.info("No listeners for event %s; deleting and dropping", event_id)
             await self._delete(receipt)
             return
 
@@ -219,9 +224,11 @@ class SQSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
         await self._delete(receipt)
 
     async def _delete(self, receipt: str) -> None:
+        client = require(self._sub_client, "SQS consume client")
+        queue_url = require(self._queue_url, "SQS queue URL")
         try:
-            await self._sub_client.delete_message(
-                QueueUrl=self._queue_url,
+            await client.delete_message(
+                QueueUrl=queue_url,
                 ReceiptHandle=receipt,
             )
         except Exception:

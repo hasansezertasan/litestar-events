@@ -131,6 +131,7 @@ class NATSEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             self._publisher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
+        self._close_queue()
 
         for sub in self._subscriptions:
             try:

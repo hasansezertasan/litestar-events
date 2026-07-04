@@ -144,6 +144,7 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        self._close_queue()
 
         if (
             self._owns_subscription
@@ -194,6 +195,9 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
     async def _handle_message(self, message: SubscriberMessage) -> None:
         event_id = (message.attributes or {}).get("event_id", "")
+        # gcloud-aio's ``subscribe`` acks a message once its handler returns
+        # normally, so every early ``return`` below both drops *and* acks the
+        # message -- a no-data or unparseable message is not redelivered.
         if message.data is None:
             logger.warning(
                 "Dropping Pub/Sub message with no data (event_id=%s)", event_id
@@ -209,7 +213,7 @@ class PubSubEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
 
         listeners = self._by_event.get(event_id, [])
         if not listeners:
-            logger.debug("No listeners for event %s; acking and dropping", event_id)
+            logger.info("No listeners for event %s; acking and dropping", event_id)
             return
 
         async def _run_one(listener: EventListener) -> None:

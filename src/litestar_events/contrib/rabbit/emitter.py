@@ -111,6 +111,7 @@ class RabbitEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
             self._publisher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
+        self._close_queue()
         if self._connection is not None:
             await self._connection.close()
 
@@ -147,7 +148,7 @@ class RabbitEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
         event_id = message.routing_key or ""
         listeners = self._by_event.get(event_id, [])
         if not listeners:
-            logger.debug("No listeners for event %s; acking and dropping", event_id)
+            logger.info("No listeners for event %s; acking and dropping", event_id)
             await message.ack()
             return
 

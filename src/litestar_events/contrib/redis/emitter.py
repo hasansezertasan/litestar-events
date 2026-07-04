@@ -89,6 +89,7 @@ class RedisEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        self._close_queue()
         if self._pubsub is not None:
             await self._pubsub.aclose()
         if self._client is not None:

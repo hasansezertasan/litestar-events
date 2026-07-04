@@ -21,7 +21,8 @@ def require(value: _T | None, name: str) -> _T:
     narrows for the type checkers but is stripped under ``python -O``, which
     would defer a stray ``None`` to an opaque ``AttributeError`` deep inside a
     detached task. This helper raises a clear ``RuntimeError`` unconditionally
-    and returns the non-``None`` value (so the caller binds a narrowed local).
+    and returns the non-``None`` value, so the caller can bind a narrowed local
+    (``pool = require(self._pool, "pool")``) or use it as a bare guard.
 
     Raises:
         RuntimeError: if ``value`` is ``None``.
@@ -54,7 +55,8 @@ class QueuedEmitterMixin:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         # The MRO ordering (mixin before the ABC) is not type-checkable, so
         # enforce it at class-definition time: a wrong order would otherwise
-        # let the ABC's abstract ``emit`` win silently.
+        # leave ``emit`` abstract, deferring the failure to an opaque
+        # ``TypeError`` at first instantiation instead of failing loudly here.
         super().__init_subclass__(**kwargs)
         from litestar.events import BaseEventEmitterBackend
 
@@ -74,3 +76,13 @@ class QueuedEmitterMixin:
             msg = "Emitter used outside its async context"
             raise RuntimeError(msg)
         self._publish_queue.put_nowait((event_id, args, kwargs))
+
+    def _close_queue(self) -> None:
+        """Drop the publish queue so a post-teardown ``emit`` raises again.
+
+        Backends call this from ``__aexit__`` after cancelling the publisher
+        task. It restores the "no live queue outside the async context"
+        invariant, so a late ``emit`` fails loudly instead of silently
+        buffering onto an abandoned queue that nothing will drain.
+        """
+        self._publish_queue = None

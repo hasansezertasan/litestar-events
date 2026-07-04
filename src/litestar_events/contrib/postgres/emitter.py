@@ -140,6 +140,7 @@ class PostgresEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        self._close_queue()
         if self._owns_pool and self._pool is not None:
             await self._pool.close()
 
