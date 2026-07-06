@@ -70,7 +70,7 @@ hooks = [
 ]
 [[repos]]
 repo = "https://github.com/ariebovenberg/slotscheck"
-rev = "v0.20.0"
+rev = "v0.20.1"
 hooks = [
   { id = "slotscheck", args = [
     "--no-strict-imports",
