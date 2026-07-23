@@ -169,7 +169,7 @@ class PostgresEventEmitter(QueuedEmitterMixin, BaseEventEmitterBackend):
                 # LISTEN cannot be parameterized; psycopg.sql.Identifier quotes
                 # the channel name safely, and _validate_channel has already
                 # rejected anything outside [A-Za-z_][A-Za-z0-9_$]*.
-                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query  # noqa: ERA001
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query  # ruff: ignore[commented-out-code]
                 await conn.execute(
                     SQL("LISTEN {}").format(Identifier(self._channel(event_id))),
                 )
