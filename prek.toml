@@ -44,7 +44,7 @@ rev = "v0.21.0"
 hooks = [{ id = "yamlfmt", args = ["-conf", ".config/.yamlfmt.yml"] }]
 [[repos]]
 repo = "https://github.com/astral-sh/uv-pre-commit"
-rev = "0.11.33"
+rev = "0.12.2"
 hooks = [{ id = "uv-lock" }]
 [[repos]]
 repo = "https://github.com/abravalheri/validate-pyproject"
