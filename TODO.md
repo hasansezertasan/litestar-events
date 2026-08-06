@@ -6,7 +6,3 @@
   - Decision (SQS backend): single managed queue for all events, with the
     originating `event_id` carried in a message attribute. This is the
     precedent for future managed backends.
-- Other Backends:
-  - [x] AWS SQS — https://github.com/ag2ai/faststream/issues/794 (`contrib/sqs`)
-  - [x] GCP Pub/Sub — https://github.com/ag2ai/faststream/issues/1229 (`contrib/pubsub`)
-  - [x] ZeroMQ — https://github.com/ag2ai/faststream/issues/1142 (`contrib/zmq`)
