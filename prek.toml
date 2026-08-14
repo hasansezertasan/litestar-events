@@ -32,7 +32,7 @@ hooks = [
 ]
 [[repos]]
 repo = "https://github.com/DetachHead/basedpyright-prek-mirror"
-rev = "1.39.9"
+rev = "1.39.10"
 hooks = [{ id = "basedpyright", files = "^((src|tests)/.*\\.py)$" }]
 [[repos]]
 repo = "https://github.com/facebook/pyrefly-pre-commit"
