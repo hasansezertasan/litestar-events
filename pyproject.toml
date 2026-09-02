@@ -41,7 +41,7 @@ dev = [
     { include-group = "optionals" },
     { include-group = "test" },
     { include-group = "lint" },
-    "prek==0.5.1",
+    "prek==0.5.2",
 ]
 
 
